@@ -1,6 +1,6 @@
 //! Chord Hub — the central router and reference clock for the Chord protocol.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -22,6 +22,12 @@ struct ConnectedVoice {
     tx: mpsc::Sender<Message>,
 }
 
+/// A scheduled action waiting to be dispatched at a future hub time.
+struct ScheduledAction {
+    source: VoiceId,
+    action: Action,
+}
+
 /// Shared hub state, protected by a mutex.
 struct HubState {
     /// Monotonic clock baseline — hub time is seconds since this instant.
@@ -32,6 +38,18 @@ struct HubState {
     voices: HashMap<VoiceId, ConnectedVoice>,
     /// Event log for the TUI (most recent events, capped).
     event_log: Vec<String>,
+    /// Scheduled actions ordered by timestamp. Uses a BTreeMap so we can
+    /// efficiently pop all actions whose time has arrived. The key is an
+    /// ordered-float-like u64 (f64 bits) to keep BTreeMap happy.
+    schedule: BTreeMap<u64, Vec<ScheduledAction>>,
+    /// Last known value for each Param-type address (for late-joiner replay).
+    param_state: HashMap<String, (VoiceId, Action)>,
+}
+
+/// Convert f64 timestamp to a sortable u64 key for the BTreeMap.
+/// Works correctly for non-negative f64 values (which hub timestamps always are).
+fn timestamp_key(t: f64) -> u64 {
+    t.to_bits()
 }
 
 impl HubState {
@@ -41,6 +59,8 @@ impl HubState {
             next_voice_id: 1,
             voices: HashMap::new(),
             event_log: Vec::new(),
+            schedule: BTreeMap::new(),
+            param_state: HashMap::new(),
         }
     }
 
@@ -120,6 +140,17 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
             st.voices.remove(&voice_id);
             return;
         }
+
+        // Replay current param state to the new voice.
+        for (source, action) in st.param_state.values() {
+            if matches_any(&hello.subscriptions, &action.address) {
+                let msg = Message::ActionMessage {
+                    source: *source,
+                    action: action.clone(),
+                };
+                let _ = tx.send(msg).await;
+            }
+        }
     }
 
     // Spawn a writer task that forwards messages from the channel to the TCP stream.
@@ -147,20 +178,29 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
             }
 
             Ok(Message::ActionMessage { action, .. }) => {
-                let st = state.lock().await;
-                let msg = Message::ActionMessage {
-                    source: voice_id,
-                    action: action.clone(),
-                };
+                let mut st = state.lock().await;
 
-                // Route to all voices whose subscriptions match the action address.
-                for voice in st.voices.values() {
-                    if voice.id == voice_id {
-                        continue; // Don't echo back to sender.
-                    }
-                    if matches_any(&voice.capabilities.subscriptions, &action.address) {
-                        let _ = voice.tx.send(msg.clone()).await;
-                    }
+                // Store param state for late-joiner replay.
+                if action.signal_type == SignalType::Param {
+                    st.param_state.insert(
+                        action.address.clone(),
+                        (voice_id, action.clone()),
+                    );
+                }
+
+                // If the action has a future timestamp, schedule it.
+                if action.timestamp > 0.0 && action.timestamp > st.now() {
+                    let key = timestamp_key(action.timestamp);
+                    st.schedule
+                        .entry(key)
+                        .or_default()
+                        .push(ScheduledAction {
+                            source: voice_id,
+                            action,
+                        });
+                } else {
+                    // Route immediately.
+                    route_action(&st, voice_id, &action).await;
                 }
             }
 
@@ -214,6 +254,51 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 
 // Pattern matching is provided by chord_core::pattern.
 use chord_core::pattern::matches_any;
+
+/// Route an action to all subscribed voices (except the sender).
+async fn route_action(st: &HubState, source: VoiceId, action: &Action) {
+    let msg = Message::ActionMessage {
+        source,
+        action: action.clone(),
+    };
+    for voice in st.voices.values() {
+        if voice.id == source {
+            continue;
+        }
+        if matches_any(&voice.capabilities.subscriptions, &action.address) {
+            let _ = voice.tx.send(msg.clone()).await;
+        }
+    }
+}
+
+/// Background task that polls the schedule queue and dispatches due actions.
+async fn run_scheduler(state: SharedState) {
+    loop {
+        {
+            let mut st = state.lock().await;
+            let now = st.now();
+            let now_key = timestamp_key(now);
+
+            // Collect all keys that are due (timestamp <= now).
+            let due_keys: Vec<u64> = st
+                .schedule
+                .range(..=now_key)
+                .map(|(k, _)| *k)
+                .collect();
+
+            // Dispatch them.
+            for key in due_keys {
+                if let Some(actions) = st.schedule.remove(&key) {
+                    for scheduled in actions {
+                        route_action(&st, scheduled.source, &scheduled.action).await;
+                    }
+                }
+            }
+        }
+        // Poll every 1ms for tight scheduling.
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TUI
@@ -350,6 +435,10 @@ pub async fn start_server(port: u16) -> anyhow::Result<(SharedState, u16)> {
             }
         }
     });
+
+    // Spawn the scheduler dispatch task.
+    let sched_state = state.clone();
+    tokio::spawn(run_scheduler(sched_state));
 
     Ok((state, actual_port))
 }
