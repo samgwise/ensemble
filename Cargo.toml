@@ -2,7 +2,7 @@
 members = [
     "chord-core",
     "chord-hub",
-    "chord-client",
+    "chord-client", "chord-bridge-midi",
 ]
 resolver = "2"
 

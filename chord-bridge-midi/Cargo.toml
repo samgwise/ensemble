@@ -1,0 +1,12 @@
+[package]
+name = "chord-bridge-midi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chord-core = { path = "../chord-core" }
+chord-client = { path = "../chord-client" }
+tokio = { version = "1", features = ["full"] }
+midir = "0.10"
+anyhow = "1"
