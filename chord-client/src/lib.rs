@@ -1,19 +1,45 @@
 //! Chord client library — connect to a Chord hub and exchange actions.
 //!
-//! # Example
+//! The [`Hub`] struct is the main entry point. It handles:
+//! - TCP connection to the hub with automatic Hello/Welcome handshake
+//! - Background clock synchronisation (transparent, no setup needed)
+//! - Sending and receiving actions via async channels
+//!
+//! # Quick Start
+//!
 //! ```no_run
 //! use chord_client::Hub;
 //! use chord_core::protocol::*;
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let mut hub = Hub::connect(7331, "my-tool", vec!["/other/*".into()]).await.unwrap();
+//!     // Connect to the hub, subscribing to actions under /other/.
+//!     let mut hub = Hub::connect(7331, "my-tool", vec!["/other/*".into()])
+//!         .await.unwrap();
+//!
+//!     // Send an action (immediate delivery).
 //!     hub.send_action(Action {
 //!         address: "/my-tool/ping".into(),
 //!         signal_type: SignalType::Event,
 //!         timestamp: 0.0,
 //!         payload: Payload::None,
 //!     }).await.unwrap();
+//!
+//!     // Schedule an action 1 second in the future.
+//!     let future_time = hub.now().await + 1.0;
+//!     hub.send_action(Action {
+//!         address: "/my-tool/delayed".into(),
+//!         signal_type: SignalType::Event,
+//!         timestamp: future_time,
+//!         payload: Payload::Single(Value::String("g'day".into())),
+//!     }).await.unwrap();
+//!
+//!     // Receive actions routed to us.
+//!     if let Some((source_voice, action)) = hub.recv_action().await {
+//!         println!("Received {} from voice {}", action.address, source_voice);
+//!     }
+//!
+//!     hub.disconnect().await;
 //! }
 //! ```
 
