@@ -1,0 +1,13 @@
+[package]
+name = "chord-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chord-core = { path = "../chord-core" }
+tokio = { version = "1", features = ["net", "rt", "sync", "time", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
