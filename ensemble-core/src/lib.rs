@@ -1,6 +1,6 @@
-//! Chord core — shared types, wire protocol, and codec for the Chord protocol.
+//! Ensemble core — shared types, wire protocol, and codec for the Ensemble protocol.
 //!
-//! This crate contains everything needed to implement a Chord voice or hub:
+//! This crate contains everything needed to implement an Ensemble voice or hub:
 //!
 //! - [`protocol`] — message types (`Action`, `Message`, `SignalType`, `Payload`, etc.)
 //! - [`codec`] — length-prefixed MessagePack frame encoding/decoding over async streams

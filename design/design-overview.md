@@ -1,18 +1,18 @@
-# Chord Design Vision (Draft)
+# Ensemble Design Vision (Draft)
 
 ## Status
 
 Draft v0.1
 
-This document captures the emerging architectural vision for Chord and serves as a reference for future protocol, implementation, and ecosystem decisions.
+This document captures the emerging architectural vision for Ensemble and serves as a reference for future protocol, implementation, and ecosystem decisions.
 
 ***
 
 # Overview
 
-Chord is a **timed message bus for creative systems**.
+Ensemble is a **timed message bus for creative systems**.
 
-It provides a shared clock, timestamped message delivery, stateful parameter distribution, subscription-based routing, and protocol bridging. Chord is designed primarily for local creative workflows, where many small tools cooperate through a common runtime.
+It provides a shared clock, timestamped message delivery, stateful parameter distribution, subscription-based routing, and protocol bridging. Ensemble is designed primarily for local creative workflows, where many small tools cooperate through a common runtime.
 
 Examples include:
 
@@ -34,7 +34,7 @@ Rust Tool
       │
 Max Patch
       │
-  Chord Hub
+  Ensemble Hub
       │
 MIDI Bridge
       │
@@ -47,15 +47,15 @@ OSC Bridge
 
 # Core Philosophy
 
-Chord is **not a music protocol**.
+Ensemble is **not a music protocol**.
 
-Chord is **not an RPC framework**.
+Ensemble is **not an RPC framework**.
 
-Chord is a timed coordination layer.
+Ensemble is a timed coordination layer.
 
 Musical applications are a primary target, but the protocol itself remains domain-neutral.
 
-A Chord application should be able to exchange messages about:
+An Ensemble application should be able to exchange messages about:
 
 ```text
 notes
@@ -75,7 +75,7 @@ using the same transport.
 
 ## Local-First
 
-Chord optimises for:
+Ensemble optimises for:
 
 ```text
 One User
@@ -171,7 +171,7 @@ The hub should remain unaware of application-specific semantics.
 
 ## Voices
 
-A voice is any Chord client.
+A voice is any Ensemble client.
 
 Examples:
 
@@ -192,7 +192,7 @@ Voices:
 
 ## Bridges
 
-A bridge translates between Chord and an external system.
+A bridge translates between Ensemble and an external system.
 
 Examples:
 
@@ -206,7 +206,7 @@ Hub Bridge
 
 External networking should generally be implemented as a bridge rather than becoming a core responsibility of the protocol.
 
-A future Chord-to-Chord bridge could connect multiple hubs.
+A future Ensemble-to-Ensemble bridge could connect multiple hubs.
 
 ***
 
@@ -360,7 +360,7 @@ hub-relative
 
 # Routing Model
 
-Chord uses hierarchical addresses inspired by OSC.
+Ensemble uses hierarchical addresses inspired by OSC.
 
 Examples:
 
@@ -379,7 +379,7 @@ Routing should exist as a standalone implementation.
 Potential crate:
 
 ```text
-chord-routing
+ensemble-routing
 ```
 
 Goals:
@@ -393,7 +393,7 @@ Goals:
 
 ## Pattern Matching
 
-Chord should define its own pattern syntax rather than inheriting OSC behaviour.
+Ensemble should define its own pattern syntax rather than inheriting OSC behaviour.
 
 Goals:
 
@@ -447,7 +447,7 @@ All implementations should pass the same test corpus.
 
 # Value Model
 
-Chord should provide a small, language-neutral value model.
+Ensemble should provide a small, language-neutral value model.
 
 Required types:
 
@@ -477,7 +477,7 @@ Lists and Maps may be nested arbitrarily.
 
 ## Why Int64 and Float64
 
-Chord intentionally avoids:
+Ensemble intentionally avoids:
 
 ```text
 i32
@@ -497,7 +497,7 @@ Implementations with narrower native representations perform conversion at the b
 
 # Typed Binary Extension
 
-Chord should support an optional opaque binary extension:
+Ensemble should support an optional opaque binary extension:
 
 ```rust
 TypedBinary {
@@ -526,7 +526,7 @@ Future hub tooling may learn to visualise specific tags.
 
 # Transport Abstraction
 
-Chord should not be tied to TCP.
+Ensemble should not be tied to TCP.
 
 Instead:
 
@@ -653,7 +653,7 @@ This capability is considered a major feature rather than a convenience.
 
 # Non-Goals (Current)
 
-Chord is not currently intended to provide:
+Ensemble is not currently intended to provide:
 
 * distributed consensus
 * internet-scale operation
@@ -669,7 +669,7 @@ These may be explored through future extensions but are not core requirements.
 
 # Summary
 
-Chord is envisioned as a:
+Ensemble is envisioned as a:
 
 > Local-first, timed message bus for creative systems.
 
@@ -703,4 +703,4 @@ without requiring changes to core routing semantics.
 
 ***
 
-With these specs in place, the next major specification should be **Timing, Scheduling & Ordering Semantics**, since timing is the most distinctive feature of Chord and will influence both hub implementation and client expectations.
+With these specs in place, the next major specification should be **Timing, Scheduling & Ordering Semantics**, since timing is the most distinctive feature of Ensemble and will influence both hub implementation and client expectations.

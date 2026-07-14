@@ -1,13 +1,13 @@
-# Chord Bridge Architecture Specification (Draft v0.1)
+# Ensemble Bridge Architecture Specification (Draft v0.1)
 Status
 
 Draft v0.1
 
 Purpose
 
-This specification defines the role of bridges within the Chord ecosystem.
+This specification defines the role of bridges within the Ensemble ecosystem.
 
-Bridges allow Chord systems to interact with external protocols, devices, services, and other Chord instances while preserving the core architecture of:
+Bridges allow Ensemble systems to interact with external protocols, devices, services, and other Ensemble instances while preserving the core architecture of:
 
 One User
 One Machine
@@ -15,12 +15,12 @@ One Hub
 Many Tools
 
 
-The goal of this specification is to ensure bridges integrate naturally with Chord without introducing special protocol behaviour.
+The goal of this specification is to ensure bridges integrate naturally with Ensemble without introducing special protocol behaviour.
 
 Design Philosophy
 Bridges Are Ordinary Voices
 
-A bridge is a Chord voice.
+A bridge is an Ensemble voice.
 
 The hub does not distinguish between:
 
@@ -32,7 +32,7 @@ OSC Bridge
 Hub Bridge
 
 
-All participate in Chord using the same:
+All participate in Ensemble using the same:
 
 connection lifecycle
 manifests
@@ -46,7 +46,7 @@ Bridges Translate Systems
 
 A bridge exists to translate between:
 
-Chord
+Ensemble
 
 
 and
@@ -56,19 +56,19 @@ External System
 
 Examples:
 
-Chord ↔ MIDI
-Chord ↔ OSC
-Chord ↔ Serial
-Chord ↔ MQTT
-Chord ↔ DMX
-Chord ↔ Chord
+Ensemble ↔ MIDI
+Ensemble ↔ OSC
+Ensemble ↔ Serial
+Ensemble ↔ MQTT
+Ensemble ↔ DMX
+Ensemble ↔ Ensemble
 
 
 The bridge acts as a semantic adapter between two systems.
 
 Bridges Apply Policy
 
-External systems do not necessarily support Chord concepts such as:
+External systems do not necessarily support Ensemble concepts such as:
 
 Params
 Scheduling
@@ -89,7 +89,7 @@ External System
         ↕
       Bridge
         ↕
-     Chord Hub
+     Ensemble Hub
 
 
 The bridge owns all translation logic.
@@ -175,7 +175,7 @@ Timestamp handling is one of the primary responsibilities of a bridge.
 
 Incoming Events
 
-When an external event enters Chord through a bridge:
+When an external event enters Ensemble through a bridge:
 
 MIDI Event
 OSC Message
@@ -183,7 +183,7 @@ Serial Packet
 Sensor Update
 
 
-the bridge should timestamp the resulting Chord Action using its current estimate of hub time.
+the bridge should timestamp the resulting Ensemble Action using its current estimate of hub time.
 
 Example:
 
@@ -194,7 +194,7 @@ at the moment the bridge receives the event.
 
 Rationale
 
-This ensures all Actions entering Chord participate in the shared hub timeline.
+This ensures all Actions entering Ensemble participate in the shared hub timeline.
 
 From the perspective of other voices:
 
@@ -205,9 +205,9 @@ appear to originate within the same temporal framework.
 
 Outgoing Events
 
-When a bridge receives a Chord Action for external transmission:
+When a bridge receives an Ensemble Action for external transmission:
 
-Chord Action
+Ensemble Action
       ↓
  Bridge
       ↓
@@ -265,7 +265,7 @@ The original Action timestamp should remain meaningful even if the external syst
 
 Semantic Translation
 
-Bridges frequently encounter mismatches between Chord semantics and external protocol capabilities.
+Bridges frequently encounter mismatches between Ensemble semantics and external protocol capabilities.
 
 Examples include:
 
@@ -317,11 +317,11 @@ depending on implementation goals.
 
 Semantic Fidelity
 
-Bridges are not required to preserve every Chord feature.
+Bridges are not required to preserve every Ensemble feature.
 
 Example:
 
-Chord Feature
+Ensemble Feature
 
 
 ↓
@@ -336,7 +336,7 @@ Perfect semantic equivalence is not required.
 Hub Bridges
 Overview
 
-A Hub Bridge connects two independent Chord hubs.
+A Hub Bridge connects two independent Ensemble hubs.
 
 Example:
 
@@ -347,21 +347,21 @@ Hub Bridge
 Hub B
 
 
-A Hub Bridge is still a bridge and therefore still a normal Chord voice.
+A Hub Bridge is still a bridge and therefore still a normal Ensemble voice.
 
 Local-First Principle
 
-Chord's primary deployment model remains:
+Ensemble's primary deployment model remains:
 
 One Machine
 One Hub
 
 
-Networked operation is achieved through Hub Bridges rather than by extending the Chord address namespace.
+Networked operation is achieved through Hub Bridges rather than by extending the Ensemble address namespace.
 
 Address Space
 
-Hub Bridges do not create a global Chord namespace.
+Hub Bridges do not create a global Ensemble namespace.
 
 A Hub Bridge decides:
 
@@ -424,11 +424,11 @@ Merge Sources
 Split Streams
 
 
-belong in applications and tooling rather than in the Chord protocol.
+belong in applications and tooling rather than in the Ensemble protocol.
 
 Future Toolbox Applications
 
-A future Chord ecosystem may provide utility applications offering:
+A future Ensemble ecosystem may provide utility applications offering:
 
 Filter
 Mapper
@@ -438,13 +438,13 @@ Transformer
 Logger
 
 
-These applications are ordinary Chord voices.
+These applications are ordinary Ensemble voices.
 
 They do not require protocol changes.
 
 Bridge Observability
 
-Bridges should participate fully in Chord observability mechanisms.
+Bridges should participate fully in Ensemble observability mechanisms.
 
 Recommended behaviour:
 
@@ -475,29 +475,29 @@ Bridge Non-Requirements
 
 A bridge is not required to:
 
-preserve every Chord semantic
-support every Chord value type
+preserve every Ensemble semantic
+support every Ensemble value type
 perform perfect time translation
 implement retained state
 implement scheduling unavailable in the external protocol
-implement every capability advertised within the Chord ecosystem
+implement every capability advertised within the Ensemble ecosystem
 
 These are implementation decisions.
 
 Summary
 
-The central principle of Chord bridging is:
+The central principle of Ensemble bridging is:
 
-Bridges are ordinary Chord voices that translate between Chord and external systems.
+Bridges are ordinary Ensemble voices that translate between Ensemble and external systems.
 
 Key properties:
 
 No bridge-specific protocol layer
 Discovery through manifests, tags, and capabilities
 Incoming events timestamped using estimated hub time
-Outgoing events respect Chord scheduling
+Outgoing events respect Ensemble scheduling
 Semantic adaptation is expected
 Hub-to-Hub communication occurs through bridges
 Filtering and transformation remain tooling concerns
 
-This approach keeps the Chord protocol small while allowing the ecosystem to grow around a rich set of interoperable bridges.
+This approach keeps the Ensemble protocol small while allowing the ecosystem to grow around a rich set of interoperable bridges.

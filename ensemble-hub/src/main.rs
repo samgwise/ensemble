@@ -1,11 +1,11 @@
-//! Chord Hub — the central router and reference clock for the Chord protocol.
+//! Ensemble Hub — the central router and reference clock for the Ensemble protocol.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
-use chord_core::protocol::*;
-use chord_core::{codec, CodecError};
+use ensemble_core::protocol::*;
+use ensemble_core::{codec, CodecError};
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
@@ -252,8 +252,8 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
     writer_handle.abort();
 }
 
-// Pattern matching is provided by chord_core::pattern.
-use chord_core::pattern::matches_any;
+// Pattern matching is provided by ensemble_core::pattern.
+use ensemble_core::pattern::matches_any;
 
 /// Route an action to all subscribed voices (except the sender).
 async fn route_action(st: &HubState, source: VoiceId, action: &Action) {
@@ -364,9 +364,9 @@ async fn run_tui(state: SharedState) -> std::io::Result<()> {
 
             // Header.
             let header = Paragraph::new(format!(
-                " Chord Hub | time: {hub_time:.2}s | voices: {voice_count} | press 'q' to quit"
+                " Ensemble Hub | time: {hub_time:.2}s | voices: {voice_count} | press 'q' to quit"
             ))
-            .block(Block::default().borders(Borders::ALL).title(" Chord "));
+            .block(Block::default().borders(Borders::ALL).title(" Ensemble "));
             frame.render_widget(header, chunks[0]);
 
             // Voices list.
@@ -445,7 +445,7 @@ pub async fn start_server(port: u16) -> anyhow::Result<(SharedState, u16)> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let port = std::env::var("CHORD_HUB_PORT")
+    let port = std::env::var("ENSEMBLE_HUB_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_PORT);
@@ -455,7 +455,7 @@ async fn main() -> anyhow::Result<()> {
     let (state, actual_port) = start_server(port).await?;
 
     if headless {
-        eprintln!("Chord Hub running headless on 127.0.0.1:{actual_port}");
+        eprintln!("Ensemble Hub running headless on 127.0.0.1:{actual_port}");
         // In headless mode, just wait forever.
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;

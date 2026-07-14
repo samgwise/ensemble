@@ -1,14 +1,14 @@
-# Chord Routing & Pattern Matching Specification (Draft)
+# Ensemble Routing & Pattern Matching Specification (Draft)
 
 **Status:** Draft v0.1  
-**Applies to:** Chord Core  
+**Applies to:** Ensemble Core  
 **Audience:** Client Implementers, Hub Implementers, Tool Authors
 
 ***
 
 # Purpose
 
-This specification defines how Chord addresses are represented and how routing patterns are matched.
+This specification defines how Ensemble addresses are represented and how routing patterns are matched.
 
 Goals:
 
@@ -23,7 +23,7 @@ Goals:
 
 # Address Model
 
-A Chord address is a UTF-8 string representing a hierarchical path.
+An Ensemble address is a UTF-8 string representing a hierarchical path.
 
 Examples:
 
@@ -93,7 +93,7 @@ Pattern matching operates on segments, not characters.
 
 # Pattern Types
 
-Chord Routing v1 defines four pattern mechanisms:
+Ensemble Routing v1 defines four pattern mechanisms:
 
 1. Exact Match
 2. Single Segment Wildcard
@@ -623,7 +623,7 @@ captures:
 
 # Design Rationale
 
-Chord Routing deliberately combines ideas from:
+Ensemble Routing deliberately combines ideas from:
 
 * OSC hierarchical addressing
 * Web framework path parameters
@@ -650,7 +650,7 @@ provides the majority of practical routing requirements while remaining simple e
 
 # Summary
 
-Chord Routing v1 defines:
+Ensemble Routing v1 defines:
 
 ```text
 Exact Match        /foo/bar

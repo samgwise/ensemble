@@ -1,4 +1,4 @@
-# Chord Timing, Scheduling & Ordering Specification (Draft v0.1)
+# Ensemble Timing, Scheduling & Ordering Specification (Draft v0.1)
 
 ## Status
 
@@ -6,7 +6,7 @@ Draft v0.1
 
 ## Purpose
 
-This specification defines the temporal behaviour of Chord, including:
+This specification defines the temporal behaviour of Ensemble, including:
 
 * the hub clock
 * timestamp representation
@@ -15,7 +15,7 @@ This specification defines the temporal behaviour of Chord, including:
 * ordering guarantees
 * Param timing semantics
 
-Timing is a core feature of Chord and one of its primary differentiators from traditional message transport systems.
+Timing is a core feature of Ensemble and one of its primary differentiators from traditional message transport systems.
 
 ***
 
@@ -37,7 +37,7 @@ rather than local system clocks.
 
 ## Local First
 
-Chord is optimised for:
+Ensemble is optimised for:
 
 ```text
 One User
@@ -74,7 +74,7 @@ Immediate messages are simply messages whose timestamp is at or before the curre
 
 ## Authoritative Clock
 
-The hub maintains the authoritative Chord clock.
+The hub maintains the authoritative Ensemble clock.
 
 Properties:
 
@@ -147,7 +147,7 @@ Examples:
 
 # Why Float64
 
-Chord standardises on:
+Ensemble standardises on:
 
 ```text
 IEEE754 Float64
@@ -289,7 +289,7 @@ Dispatched at hub time >= 105.0
 
 # Dispatch Guarantees
 
-Chord guarantees:
+Ensemble guarantees:
 
 ```text
 Not Before
@@ -320,7 +320,7 @@ It may be dispatched later due to:
 
 # Scheduling Resolution
 
-Chord intentionally does not define a minimum scheduling accuracy.
+Ensemble intentionally does not define a minimum scheduling accuracy.
 
 The protocol does not specify:
 
@@ -390,7 +390,7 @@ for a single sender.
 
 ## Cross-Sender Ordering
 
-Chord does not define a global ordering between actions from different voices.
+Ensemble does not define a global ordering between actions from different voices.
 
 Example:
 
@@ -579,7 +579,7 @@ Action {
 
 This provides a uniform temporal model:
 
-> Every action exists at a specific point on the Chord timeline.
+> Every action exists at a specific point on the Ensemble timeline.
 
 Even when an action is dispatched immediately, its timestamp remains available for:
 
@@ -594,7 +594,7 @@ The hub may use receipt time internally when handling overdue actions, but the o
 
 # Summary
 
-Chord timing is based on a shared hub-relative monotonic clock.
+Ensemble timing is based on a shared hub-relative monotonic clock.
 
 Key guarantees:
 

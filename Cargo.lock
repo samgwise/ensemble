@@ -94,49 +94,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "chord-bridge-midi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chord-client",
- "chord-core",
- "midir",
- "tokio",
-]
-
-[[package]]
-name = "chord-client"
-version = "0.1.0"
-dependencies = [
- "chord-core",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "chord-core"
-version = "0.1.0"
-dependencies = [
- "rmp-serde",
- "serde",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "chord-hub"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chord-core",
- "crossterm",
- "ratatui",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "compact_str"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -251,6 +208,49 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "ensemble-bridge-midi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ensemble-client",
+ "ensemble-core",
+ "midir",
+ "tokio",
+]
+
+[[package]]
+name = "ensemble-client"
+version = "0.1.0"
+dependencies = [
+ "ensemble-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "ensemble-core"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "ensemble-hub"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "ensemble-core",
+ "ratatui",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "equivalent"

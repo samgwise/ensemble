@@ -1,18 +1,18 @@
-# Chord Hub Observability & Diagnostics Specification (Draft v0.1)
+# Ensemble Hub Observability & Diagnostics Specification (Draft v0.1)
 Status
 
 Draft v0.1
 
 Purpose
 
-The Chord Hub provides:
+The Ensemble Hub provides:
 
 routing
 scheduling
 Param storage
 clock authority
 
-In addition, the Hub acts as the primary observability tool for a running Chord system.
+In addition, the Hub acts as the primary observability tool for a running Ensemble system.
 
 This specification defines:
 
@@ -23,7 +23,7 @@ monitoring behaviour
 Design Philosophy
 Visibility Is A Feature
 
-Chord systems should be observable by default.
+Ensemble systems should be observable by default.
 
 Users should not need:
 
@@ -62,7 +62,7 @@ The Hub may emit Actions using reserved addresses:
 /hub/**
 
 
-These are ordinary Chord Actions.
+These are ordinary Ensemble Actions.
 
 They may be subscribed to like any other Action.
 
@@ -563,4 +563,4 @@ Diagnostic Console
 Discovery Tool
 
 
-The intent is that a user can understand a running Chord system primarily through Hub tooling, rather than through ad hoc logging, packet inspection, or custom debugging utilities. This observability-first approach is a core part of the Chord experience and a major differentiator from many existing creative coding and music-control ecosystems.
+The intent is that a user can understand a running Ensemble system primarily through Hub tooling, rather than through ad hoc logging, packet inspection, or custom debugging utilities. This observability-first approach is a core part of the Ensemble experience and a major differentiator from many existing creative coding and music-control ecosystems.

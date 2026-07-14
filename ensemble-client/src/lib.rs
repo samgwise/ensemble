@@ -1,4 +1,4 @@
-//! Chord client library — connect to a Chord hub and exchange actions.
+//! Ensemble client library — connect to an Ensemble hub and exchange actions.
 //!
 //! The [`Hub`] struct is the main entry point. It handles:
 //! - TCP connection to the hub with automatic Hello/Welcome handshake
@@ -8,8 +8,8 @@
 //! # Quick Start
 //!
 //! ```no_run
-//! use chord_client::Hub;
-//! use chord_core::protocol::*;
+//! use ensemble_client::Hub;
+//! use ensemble_core::protocol::*;
 //!
 //! #[tokio::main]
 //! async fn main() {
@@ -46,9 +46,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use chord_core::clock::ClockSync;
-use chord_core::protocol::*;
-use chord_core::{codec, CodecError};
+use ensemble_core::clock::ClockSync;
+use ensemble_core::protocol::*;
+use ensemble_core::{codec, CodecError};
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -57,7 +57,7 @@ use tokio::sync::{mpsc, Mutex};
 struct LocalClock {
     /// Monotonic clock baseline.
     origin: Instant,
-    /// Shared sync algorithm from chord-core.
+    /// Shared sync algorithm from ensemble-core.
     sync: ClockSync,
 }
 
@@ -94,7 +94,7 @@ impl LocalClock {
 // Hub connection
 // ---------------------------------------------------------------------------
 
-/// A connection to a Chord hub.
+/// A connection to an Ensemble hub.
 pub struct Hub {
     /// Our assigned voice ID.
     pub voice_id: VoiceId,
@@ -107,7 +107,7 @@ pub struct Hub {
 }
 
 impl Hub {
-    /// Connect to a Chord hub on localhost.
+    /// Connect to an Ensemble hub on localhost.
     pub async fn connect(
         port: u16,
         name: &str,

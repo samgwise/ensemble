@@ -1,4 +1,4 @@
-# Chord Manifest Specification (Draft v0.1)
+# Ensemble Manifest Specification (Draft v0.1)
 
 ## Status
 
@@ -29,7 +29,7 @@ Manifests do **not** create or remove subscriptions.
 
 ## Runtime First
 
-Chord manifests are dynamic.
+Ensemble manifests are dynamic.
 
 A voice may:
 
@@ -67,7 +67,7 @@ but protocol behaviour must not depend upon manifest contents.
 
 ## Self-Documenting Systems
 
-A user should be able to inspect a running Chord system and discover:
+A user should be able to inspect a running Ensemble system and discover:
 
 * what voices exist
 * what they provide
@@ -250,7 +250,7 @@ RouteInfo {
 
 ## Address
 
-A Chord routing pattern.
+An Ensemble routing pattern.
 
 Examples:
 

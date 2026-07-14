@@ -1,22 +1,22 @@
-//! Chord MIDI Bridge — translates between Chord actions and MIDI I/O.
+//! Ensemble MIDI Bridge — translates between Ensemble actions and MIDI I/O.
 //!
 //! Connects to the hub as a bridge voice and:
 //! - `/midi/play` → schedules note-on + note-off with mutex-based cancel safety
 //! - `/midi/cancel` → invalidates pending note-off for a channel/note
 //! - `/midi/cc` → sends a MIDI CC message
-//! - MIDI input → publishes as Chord actions through the hub
+//! - MIDI input → publishes as Ensemble actions through the hub
 //!
 //! Usage:
-//!   cargo run --bin chord-bridge-midi
-//!   cargo run --bin chord-bridge-midi -- --output 1 --input 0
-//!   cargo run --bin chord-bridge-midi -- --list
+//!   cargo run --bin ensemble-bridge-midi
+//!   cargo run --bin ensemble-bridge-midi -- --output 1 --input 0
+//!   cargo run --bin ensemble-bridge-midi -- --list
 
 mod key_state;
 
 use std::sync::Arc;
 
-use chord_client::Hub;
-use chord_core::protocol::*;
+use ensemble_client::Hub;
+use ensemble_core::protocol::*;
 use key_state::{KeyStateStore, MidiBytes};
 use midir::{MidiInput, MidiOutput};
 use tokio::sync::{mpsc, Mutex};
@@ -131,7 +131,7 @@ fn parse_cc_payload(payload: &Payload) -> Option<(u8, u8, u8)> {
     }
 }
 
-/// Process incoming Chord actions and translate them to MIDI output.
+/// Process incoming Ensemble actions and translate them to MIDI output.
 async fn run_action_router(
     mut hub: Hub,
     midi_tx: mpsc::Sender<MidiOutCmd>,
@@ -198,12 +198,12 @@ async fn run_action_router(
 // MIDI input handling
 // ---------------------------------------------------------------------------
 
-/// Spawn a MIDI input listener that publishes incoming MIDI as Chord actions.
+/// Spawn a MIDI input listener that publishes incoming MIDI as Ensemble actions.
 fn spawn_midi_input(
     port_index: usize,
     hub_tx: mpsc::Sender<Action>,
 ) -> anyhow::Result<()> {
-    let midi_in = MidiInput::new("chord-bridge-midi-in")?;
+    let midi_in = MidiInput::new("ensemble-bridge-midi-in")?;
     let ports = midi_in.ports();
     let port = ports
         .get(port_index)
@@ -215,7 +215,7 @@ fn spawn_midi_input(
     // midir callback runs on its own thread.
     let _conn = midi_in.connect(
         port,
-        "chord-bridge-midi-in",
+        "ensemble-bridge-midi-in",
         move |_timestamp, message, tx| {
             if message.len() < 2 {
                 return;
@@ -286,7 +286,7 @@ fn spawn_midi_input(
 
 fn list_ports() {
     eprintln!("\nMIDI Output Ports:");
-    if let Ok(midi_out) = MidiOutput::new("chord-list") {
+    if let Ok(midi_out) = MidiOutput::new("ensemble-list") {
         let ports = midi_out.ports();
         if ports.is_empty() {
             eprintln!("  (none)");
@@ -298,7 +298,7 @@ fn list_ports() {
     }
 
     eprintln!("\nMIDI Input Ports:");
-    if let Ok(midi_in) = MidiInput::new("chord-list") {
+    if let Ok(midi_in) = MidiInput::new("ensemble-list") {
         let ports = midi_in.ports();
         if ports.is_empty() {
             eprintln!("  (none)");
@@ -345,7 +345,7 @@ async fn main() -> anyhow::Result<()> {
     list_ports();
 
     // Open MIDI output.
-    let midi_out = MidiOutput::new("chord-bridge-midi")?;
+    let midi_out = MidiOutput::new("ensemble-bridge-midi")?;
     let out_ports = midi_out.ports();
     let out_idx = output_index.unwrap_or(0);
     let out_port = out_ports
@@ -353,7 +353,7 @@ async fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No MIDI output port at index {out_idx}"))?;
     let out_name = midi_out.port_name(out_port).unwrap_or_default();
     eprintln!("Opening MIDI output: {out_idx} ({out_name})");
-    let conn_out = midi_out.connect(out_port, "chord-bridge-midi")?;
+    let conn_out = midi_out.connect(out_port, "ensemble-bridge-midi")?;
     let midi_tx = spawn_midi_output(conn_out);
 
     // Connect to hub.

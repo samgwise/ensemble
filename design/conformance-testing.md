@@ -10,7 +10,7 @@ Max interpretation
 
 and they all differ subtly.
 
-Given one of Chord's goals is:
+Given one of Ensemble's goals is:
 
 Many languages
 Many environments
@@ -19,14 +19,14 @@ One protocol
 
 I think the conformance suite should be treated as a first-class deliverable from very early on.
 
-Chord Conformance & Interoperability Specification (Draft v0.1)
+Ensemble Conformance & Interoperability Specification (Draft v0.1)
 Status
 
 Draft v0.1
 
 Purpose
 
-This specification defines how Chord implementations demonstrate compatibility with the protocol.
+This specification defines how Ensemble implementations demonstrate compatibility with the protocol.
 
 The goals are:
 
@@ -194,7 +194,7 @@ value:
 Map order must not affect conformance.
 
 Typed Binary
-tag: "chord/f32"
+tag: "ensemble/f32"
 
 data: "..."
 
@@ -213,7 +213,7 @@ from:
 Serialization Format
 
 
-Tests should verify that implementations preserve Chord semantics through encoding and decoding.
+Tests should verify that implementations preserve Ensemble semantics through encoding and decoding.
 
 Examples:
 
@@ -418,7 +418,7 @@ Implementations should not allow protocol behaviour to depend on hub event publi
 
 Reference Fixtures
 
-The Chord project should maintain:
+The Ensemble project should maintain:
 
 routing/
 values/
@@ -494,7 +494,7 @@ This gives lightweight bridges and embedded implementations a clear target.
 
 Summary
 
-A conformant Chord implementation should behave identically when presented with the same:
+A conformant Ensemble implementation should behave identically when presented with the same:
 
 routing patterns
 values

@@ -1,25 +1,25 @@
 # Product Requirements Document (PRD)
-Chord Reference Implementation & Hub TUI
+Ensemble Reference Implementation & Hub TUI
 
 Version: Draft v0.1
  Status: Proposed
  Target Language: Rust
- Audience: Core Chord Contributors, Client Library Authors, Bridge Developers
+ Audience: Core Ensemble Contributors, Client Library Authors, Bridge Developers
 
 1. Overview
 
-The Chord Reference Implementation serves four purposes:
+The Ensemble Reference Implementation serves four purposes:
 
 Define canonical protocol behaviour.
 Validate protocol specifications.
 Provide the primary hub runtime.
 Deliver a first-class observability experience.
 
-The reference implementation is not merely a protocol daemon. It is intended to become the primary tool for understanding and debugging Chord systems.
+The reference implementation is not merely a protocol daemon. It is intended to become the primary tool for understanding and debugging Ensemble systems.
 
 2. Product Vision
 
-Chord should provide a development experience where a user can:
+Ensemble should provide a development experience where a user can:
 
 Start Hub
 Connect Tools
@@ -41,30 +41,30 @@ MIDI Monitor
 OSC Monitor
 
 
-for Chord systems.
+for Ensemble systems.
 
 3. Project Structure
 
 The project should be implemented as a Rust workspace.
 
-chord/
+ensemble/
 │
-├─ chord-core/
-├─ chord-values/
-├─ chord-routing/
-├─ chord-protocol/
-├─ chord-clock/
-├─ chord-manifest/
-├─ chord-hub/
-├─ chord-hub-tui/
-├─ chord-client/
-├─ chord-test-fixtures/
-├─ chord-conformance/
+├─ ensemble-core/
+├─ ensemble-values/
+├─ ensemble-routing/
+├─ ensemble-protocol/
+├─ ensemble-clock/
+├─ ensemble-manifest/
+├─ ensemble-hub/
+├─ ensemble-hub-tui/
+├─ ensemble-client/
+├─ ensemble-test-fixtures/
+├─ ensemble-conformance/
 │
 └─ tools/
 
 4. Workspace Crates
-chord-values
+ensemble-values
 
 Defines:
 
@@ -89,7 +89,7 @@ validation helpers
 
 No networking.
 
-chord-routing
+ensemble-routing
 
 Defines:
 
@@ -107,7 +107,7 @@ routing conformance tests
 
 Should be usable independently via FFI.
 
-chord-clock
+ensemble-clock
 
 Defines:
 
@@ -124,7 +124,7 @@ RTT tracking
 
 Should be separately testable.
 
-chord-manifest
+ensemble-manifest
 
 Defines:
 
@@ -139,7 +139,7 @@ Responsibilities:
 manifest handling
 patch application
 validation
-chord-protocol
+ensemble-protocol
 
 Defines:
 
@@ -156,7 +156,7 @@ protocol validation
 
 No transport logic.
 
-chord-client
+ensemble-client
 
 Client SDK.
 
@@ -175,11 +175,11 @@ hub.now()
 
 and scheduling helpers.
 
-chord-core
+ensemble-core
 
 Shared structures and traits used throughout the ecosystem.
 
-chord-hub
+ensemble-hub
 
 Actual server implementation.
 
@@ -194,13 +194,13 @@ hub events
 
 No UI.
 
-chord-hub-tui
+ensemble-hub-tui
 
 Terminal user interface.
 
 Responsible for all visualisation and observability.
 
-chord-conformance
+ensemble-conformance
 
 Conformance runner.
 
@@ -258,7 +258,7 @@ Patterns
 Subscriptions
 
 
-via chord-routing.
+via ensemble-routing.
 
 Hub Event Producer
 
@@ -279,7 +279,7 @@ The TUI is a first-class component.
 
 It should be possible to run:
 
-chord-hub
+ensemble-hub
 
 
 and immediately understand system behaviour.
@@ -508,8 +508,8 @@ cargo bench
 
 Support:
 
-cargo test -p chord-routing
-cargo test -p chord-conformance
+cargo test -p ensemble-routing
+cargo test -p ensemble-conformance
 
 
 individually.
@@ -570,16 +570,16 @@ Debug timing and scheduling.
 Run conformance tests against client implementations.
 Deliverables
 Core
-chord-hub
-chord-client
-chord-routing
-chord-values
-chord-protocol
-chord-clock
+ensemble-hub
+ensemble-client
+ensemble-routing
+ensemble-values
+ensemble-protocol
+ensemble-clock
 
 Tooling
-chord-hub-tui
-chord-conformance
+ensemble-hub-tui
+ensemble-conformance
 
 Documentation
 Protocol Specs
@@ -588,4 +588,4 @@ Conformance Guide
 Bridge Guide
 
 
-The primary goal of the reference implementation is not simply to prove the protocol works, but to establish Chord's identity as a shared timing, state, and observability platform for creative systems.
+The primary goal of the reference implementation is not simply to prove the protocol works, but to establish Ensemble's identity as a shared timing, state, and observability platform for creative systems.

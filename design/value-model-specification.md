@@ -1,18 +1,18 @@
-Chord Value Model Specification (Draft v0.1)
+Ensemble Value Model Specification (Draft v0.1)
 Status
 
 Draft v0.1
 
 Purpose
 
-This specification defines the Chord value system used for:
+This specification defines the Ensemble value system used for:
 
 Action payloads
 Param values
 Manifest examples
 Future protocol extensions
 
-The Chord value model is intentionally small, language-neutral, and independent from any particular serialization format.
+The Ensemble value model is intentionally small, language-neutral, and independent from any particular serialization format.
 
 Design Principles
 Language Neutral
@@ -31,7 +31,7 @@ No generated schemas or code generation are required.
 
 Serialization Independent
 
-Chord values describe semantic meaning.
+Ensemble values describe semantic meaning.
 
 They are not tied to a specific encoding format.
 
@@ -47,7 +47,7 @@ List
 
 even if both are encoded identically within a particular serializer.
 
-The Chord value model is independent from:
+The Ensemble value model is independent from:
 
 MessagePack
 JSON
@@ -67,7 +67,7 @@ rather than extending the core value system.
 
 Value Types
 
-Chord defines the following value types:
+Ensemble defines the following value types:
 
 Null
 
@@ -206,7 +206,7 @@ Examples:
 "مستوى"
 
 
-Strings are used throughout Chord for:
+Strings are used throughout Ensemble for:
 
 addresses
 capture names
@@ -300,7 +300,7 @@ values are conceptually members of the same set
 iteration is expected
 Tuple vs List
 
-Chord intentionally distinguishes between Tuple and List.
+Ensemble intentionally distinguishes between Tuple and List.
 
 Tuple:
 
@@ -415,18 +415,18 @@ Case-sensitive
 
 Examples:
 
-chord/f32
-chord/complex64
+ensemble/f32
+ensemble/complex64
 org.example.matrix
 
 Reserved Namespace
 
 The following namespace is reserved:
 
-chord/*
+ensemble/*
 
 
-Reserved tags may be defined by future Chord specifications.
+Reserved tags may be defined by future Ensemble specifications.
 
 Hub Behaviour
 
@@ -489,7 +489,7 @@ These are implementation concerns rather than protocol semantics.
 
 Equality
 
-Chord does not define value equality semantics.
+Ensemble does not define value equality semantics.
 
 Example:
 
@@ -547,11 +547,11 @@ list<float>
 
 These hints are advisory.
 
-They do not alter the Chord value model.
+They do not alter the Ensemble value model.
 
 Summary
 
-Chord v0.1 defines the following value types:
+Ensemble v0.1 defines the following value types:
 
 Null
 

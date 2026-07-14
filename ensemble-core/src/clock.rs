@@ -1,4 +1,4 @@
-//! Clock synchronisation algorithm for Chord voices.
+//! Clock synchronisation algorithm for Ensemble voices.
 //!
 //! Uses a min-RTT filter to estimate the offset between a voice's local
 //! clock and the hub's reference clock, similar to O2/NTP.

@@ -1,4 +1,4 @@
-//! Wire protocol message types for the Chord protocol.
+//! Wire protocol message types for the Ensemble protocol.
 //!
 //! Every message exchanged between hub and voices is a `Message` enum,
 //! serialised as length-prefixed MessagePack frames over TCP.
@@ -47,7 +47,7 @@ pub enum Payload {
 // Action
 // ---------------------------------------------------------------------------
 
-/// An action is the fundamental message unit in Chord.
+/// An action is the fundamental message unit in Ensemble.
 /// It represents something happening — a note, a parameter change, a trigger.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Action {

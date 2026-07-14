@@ -1,15 +1,15 @@
-//! Integration tests for the Chord protocol.
+//! Integration tests for the Ensemble protocol.
 //!
-//! These tests spin up a minimal hub in-process (no TUI, no chord-hub binary)
+//! These tests spin up a minimal hub in-process (no TUI, no ensemble-hub binary)
 //! and connect real clients to verify end-to-end behaviour.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
-use chord_core::codec;
-use chord_core::pattern::matches_any;
-use chord_core::protocol::*;
+use ensemble_core::codec;
+use ensemble_core::pattern::matches_any;
+use ensemble_core::protocol::*;
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
@@ -215,7 +215,7 @@ async fn start_test_hub() -> u16 {
 // Tests
 // ---------------------------------------------------------------------------
 
-use chord_client::Hub;
+use ensemble_client::Hub;
 
 #[tokio::test]
 async fn two_voices_exchange_actions() {

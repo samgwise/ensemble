@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "chord-core",
-    "chord-hub",
-    "chord-client", "chord-bridge-midi",
+    "ensemble-core",
+    "ensemble-hub",
+    "ensemble-client", "ensemble-bridge-midi",
 ]
 resolver = "2"
 

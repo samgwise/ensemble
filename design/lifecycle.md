@@ -1,4 +1,4 @@
-# Chord Connection & Lifecycle Specification (Draft v0.1)
+# Ensemble Connection & Lifecycle Specification (Draft v0.1)
 
 ## Status
 
@@ -304,6 +304,6 @@ rather than:
 /voice/42/transport/bpm
 ```
 
-Voice IDs must not be embedded into Chord addressing semantics.
+Voice IDs must not be embedded into Ensemble addressing semantics.
 
 ***

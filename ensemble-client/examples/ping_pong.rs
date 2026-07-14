@@ -1,10 +1,10 @@
-//! Demo: Two voices exchanging actions through a Chord hub.
+//! Demo: Two voices exchanging actions through an Ensemble hub.
 //!
-//! Run the hub first:  cargo run --bin chord-hub
+//! Run the hub first:  cargo run --bin ensemble-hub
 //! Then this example:  cargo run --example ping_pong
 
-use chord_client::Hub;
-use chord_core::protocol::*;
+use ensemble_client::Hub;
+use ensemble_core::protocol::*;
 
 #[tokio::main]
 async fn main() {

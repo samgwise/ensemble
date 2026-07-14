@@ -1,11 +1,11 @@
-Chord Wire Protocol & Message Types Specification (Draft v0.1)
+Ensemble Wire Protocol & Message Types Specification (Draft v0.1)
 Status
 
 Draft v0.1
 
 Purpose
 
-This specification defines the Chord wire protocol, including:
+This specification defines the Ensemble wire protocol, including:
 
 transport framing
 message encoding
@@ -43,7 +43,7 @@ New message types may be introduced in future protocol versions without requirin
 
 Separate Control and Data
 
-Chord distinguishes between:
+Ensemble distinguishes between:
 
 Control Plane
 
@@ -70,7 +70,7 @@ Hub-generated actions:
 /hub/error
 
 Protocol Stack
-Chord Messages
+Ensemble Messages
         ↓
 MessagePack
         ↓
@@ -80,7 +80,7 @@ Transport
 
 Transport Independence
 
-Chord is transport-independent.
+Ensemble is transport-independent.
 
 The protocol may be carried over:
 
@@ -105,7 +105,7 @@ Format:
 
 The length specifies the size of the MessagePack payload in bytes.
 
-Each frame contains exactly one Chord message.
+Each frame contains exactly one Ensemble message.
 
 Encoding
 
@@ -191,7 +191,7 @@ Version negotiation beyond this is out of scope for v0.1.
 
 Message Categories
 
-Chord messages fall into five categories:
+Ensemble messages fall into five categories:
 
 Lifecycle
 Discovery
@@ -363,7 +363,7 @@ Removes a previously registered subscription.
 
 Data Messages
 
-Data messages carry Chord application traffic.
+Data messages carry Ensemble application traffic.
 
 action
 
@@ -392,7 +392,7 @@ Example:
 }
 
 
-Actions are the primary message type used by Chord applications.
+Actions are the primary message type used by Ensemble applications.
 
 unset_param
 
@@ -506,7 +506,7 @@ remain dedicated protocol messages.
 
 Hub Events
 
-The hub may generate ordinary Chord Actions using reserved addresses.
+The hub may generate ordinary Ensemble Actions using reserved addresses.
 
 Examples:
 
@@ -578,7 +578,7 @@ bridging
 observability
 Summary
 
-Chord v0.1 defines a simple MessagePack-based protocol built around:
+Ensemble v0.1 defines a simple MessagePack-based protocol built around:
 
 String Message Types
 Shared Message Envelope

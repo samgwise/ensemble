@@ -1,4 +1,4 @@
-//! Address pattern matching for Chord subscriptions.
+//! Address pattern matching for Ensemble subscriptions.
 //!
 //! Supports OSC-style hierarchical paths with trailing wildcard matching.
 

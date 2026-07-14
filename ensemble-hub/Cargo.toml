@@ -1,11 +1,11 @@
 [package]
-name = "chord-hub"
+name = "ensemble-hub"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-chord-core = { path = "../chord-core" }
+ensemble-core = { path = "../ensemble-core" }
 tokio = { version = "1", features = ["full"] }
 ratatui = "0.29"
 crosskeyterm = { package = "crossterm", version = "0.28" }

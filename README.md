@@ -1,8 +1,8 @@
-# Chord
+# Ensemble
 
 A hub-and-spoke protocol for interconnecting small music applications, with centralised timing, scheduling, and protocol bridging.
 
-Chord makes it easy to build bespoke music tools without each tool needing to handle MIDI interfacing, clock synchronisation, or scheduling. A central **hub** provides a reference clock and routes **actions** between **voices** (connected tools). Bridge nodes translate actions to and from external protocols like MIDI.
+Ensemble makes it easy to build bespoke music tools without each tool needing to handle MIDI interfacing, clock synchronisation, or scheduling. A central **hub** provides a reference clock and routes **actions** between **voices** (connected tools). Bridge nodes translate actions to and from external protocols like MIDI.
 
 ## Architecture
 
@@ -15,7 +15,7 @@ Chord makes it easy to build bespoke music tools without each tool needing to ha
      └─────────────┼─────────────┘
                    │ TCP (localhost)
             ┌──────▼──────┐
-            │  Chord Hub  │
+            │  Ensemble Hub  │
             │  (router +  │
             │   clock)    │
             └──────┬──────┘
@@ -29,7 +29,7 @@ Chord makes it easy to build bespoke music tools without each tool needing to ha
 ```
 
 **Terminology:**
-- **Chord** — the overall protocol and system
+- **Ensemble** — the overall protocol and system
 - **Hub** — the central process providing the reference clock and message routing
 - **Voice** — a connected client (your tool, a sequencer, a synth controller, etc.)
 - **Action** — a message routed through the hub
@@ -40,7 +40,7 @@ Chord makes it easy to build bespoke music tools without each tool needing to ha
 ### 1. Start the hub
 
 ```sh
-cargo run --bin chord-hub
+cargo run --bin ensemble-hub
 ```
 
 The hub launches with a TUI showing connected voices and an event log. Press `q` to quit. Use `--headless` for no UI.
@@ -48,27 +48,27 @@ The hub launches with a TUI showing connected voices and an event log. Press `q`
 ### 2. Start the MIDI bridge
 
 ```sh
-cargo run --bin chord-bridge-midi
+cargo run --bin ensemble-bridge-midi
 ```
 
 Lists available MIDI ports and connects to the first output. Use `--output N` to select a specific port, `--list` to just list ports.
 
 ### 3. Build a tool
 
-Add `chord-client` and `chord-core` to your `Cargo.toml`:
+Add `ensemble-client` and `ensemble-core` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-chord-client = { path = "../chord-client" }
-chord-core = { path = "../chord-core" }
+ensemble-client = { path = "../ensemble-client" }
+ensemble-core = { path = "../ensemble-core" }
 tokio = { version = "1", features = ["full"] }
 ```
 
 Connect to the hub and play a note:
 
 ```rust
-use chord_client::Hub;
-use chord_core::protocol::*;
+use ensemble_client::Hub;
+use ensemble_core::protocol::*;
 
 #[tokio::main]
 async fn main() {
@@ -164,26 +164,26 @@ Messages are length-prefixed MessagePack frames over TCP:
 [4 bytes LE length][MessagePack payload]
 ```
 
-MessagePack was chosen for cross-language support — native implementations exist for Python, JavaScript, Go, C, and most other languages. This means writing a Chord client in another language requires no code generation or native bindings.
+MessagePack was chosen for cross-language support — native implementations exist for Python, JavaScript, Go, C, and most other languages. This means writing an Ensemble client in another language requires no code generation or native bindings.
 
 ## Crate Structure
 
 | Crate | Type | Description |
 |-------|------|-------------|
-| `chord-core` | Library | Shared types, wire protocol, clock sync algorithm, pattern matching |
-| `chord-hub` | Binary | Central router with TUI |
-| `chord-client` | Library | Client library for building tools |
-| `chord-bridge-midi` | Binary | MIDI I/O bridge |
+| `ensemble-core` | Library | Shared types, wire protocol, clock sync algorithm, pattern matching |
+| `ensemble-hub` | Binary | Central router with TUI |
+| `ensemble-client` | Library | Client library for building tools |
+| `ensemble-bridge-midi` | Binary | MIDI I/O bridge |
 
 ## Configuration
 
-The hub defaults to port `7331`. Override with `CHORD_HUB_PORT` env var or `--headless` for CI/testing.
+The hub defaults to port `7331`. Override with `ENSEMBLE_HUB_PORT` env var or `--headless` for CI/testing.
 
 The MIDI bridge accepts `--output N`, `--input N`, `--hub PORT`, and `--list`.
 
 ## Prior Art and Acknowledgements
 
-Chord's design is informed by several existing systems:
+Ensemble's design is informed by several existing systems:
 
 - **[O2](https://rbdannenberg.github.io/o2/)** (Roger Dannenberg, CMU) — the clock synchronisation and timestamped message delivery model is directly inspired by O2's approach.
 - **[CLASP](https://github.com/lumencanvas/clasp)** — the semantic signal type distinction (Event/Param/Stream) is influenced by CLASP's signal taxonomy.

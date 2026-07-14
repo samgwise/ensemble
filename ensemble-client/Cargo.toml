@@ -1,11 +1,11 @@
 [package]
-name = "chord-client"
+name = "ensemble-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-chord-core = { path = "../chord-core" }
+ensemble-core = { path = "../ensemble-core" }
 tokio = { version = "1", features = ["net", "rt", "sync", "time", "macros"] }
 tracing = "0.1"
 
