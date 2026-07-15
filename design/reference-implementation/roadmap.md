@@ -66,7 +66,7 @@ TUI — currently bundled into `ensemble-hub` and minimal. Spec separates `ensem
 Update this section as work proceeds. Mark each increment `[x]` when its acceptance criteria are met and all tests pass. Use `[~]` for in progress and `[ ]` for not started. Record the merge/commit reference on the line when complete.
 
 - [x] 1. Routing — commit: f458a86
-- [ ] 2. Value model — commit: _
+- [x] 2. Value model — commit: bfe4be8
 - [ ] 3. Protocol messages — commit: _
 - [ ] 4. Lifecycle — commit: _
 - [ ] 5. Manifest — commit: _
@@ -103,9 +103,9 @@ Acceptance criteria:
 - `cargo test -p ensemble-values` passes value and serialization conformance.
 - No `i32`/`f32` primitives remain in the value model.
 - `ensemble/*` TypedBinary namespace reserved.
-Status: Not started. Depends on nothing.
+Status: Complete.
 
-6.3 Protocol messages
+### 6.3 Protocol messages
 Goal: move to the `WireMessage { type, payload }` envelope and the spec message set.
 Crate: extract `ensemble-protocol` (envelope, message types, codec) from `ensemble-core`.
 Spec reference: `design/protocol-spec.md`; protocol fixtures in `design/conformance-testing.md`.
