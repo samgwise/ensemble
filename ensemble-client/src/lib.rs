@@ -323,6 +323,25 @@ impl Hub {
             .map_err(|_| CodecError::ConnectionClosed)
     }
 
+    /// Set or replace the manifest for this voice.
+    pub async fn set_manifest(&self, manifest: &VoiceManifest) -> Result<(), CodecError> {
+        let msg = set_manifest(manifest.to_value());
+        self.tx
+            .send(msg)
+            .await
+            .map_err(|_| CodecError::ConnectionClosed)
+    }
+
+    /// Apply a partial patch to this voice's manifest.
+    /// The patch is a `Value::Map` containing only the fields to update.
+    pub async fn patch_manifest(&self, patch: Value) -> Result<(), CodecError> {
+        let msg = patch_manifest(patch);
+        self.tx
+            .send(msg)
+            .await
+            .map_err(|_| CodecError::ConnectionClosed)
+    }
+
     /// Get the current estimated hub time.
     pub async fn now(&self) -> f64 {
         self.clock.lock().await.hub_now()

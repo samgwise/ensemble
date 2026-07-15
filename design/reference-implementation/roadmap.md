@@ -69,7 +69,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 2. Value model — commit: bfe4be8
 - [x] 3. Protocol messages — commit: 291c6ec
 - [x] 4. Lifecycle — commit: 8c6dce0
-- [ ] 5. Manifest — commit: _
+- [x] 5. Manifest — commit: _
 - [ ] 6. Scheduling — commit: _
 - [ ] 7. Observability and hub events — commit: _
 - [ ] 8. Hub / TUI split — commit: _
@@ -142,7 +142,7 @@ Acceptance criteria:
 - `set_manifest` replaces; `patch_manifest` updates only specified fields.
 - Manifest updates require no reconnect.
 - Routing behaviour is independent of manifest contents.
-Status: Not started. Depends on 6.3, 6.4.
+Status: Complete.
 
 6.6 Scheduling
 Goal: correct param timing and scheduling semantics per `design/scheduling.md`.

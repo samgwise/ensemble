@@ -4,6 +4,7 @@ members = [
     "ensemble-values",
     "ensemble-routing",
     "ensemble-protocol",
+    "ensemble-manifest",
     "ensemble-hub",
     "ensemble-client", "ensemble-bridge-midi",
 ]

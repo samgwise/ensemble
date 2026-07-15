@@ -53,6 +53,8 @@ struct HubState {
     schedule: BTreeMap<u64, Vec<ScheduledAction>>,
     /// Last known value for each Param-type address (for late-joiner replay).
     param_state: HashMap<String, (VoiceId, WireMessage)>,
+    /// Current manifest for each voice (advisory metadata, does not affect routing).
+    manifests: HashMap<VoiceId, VoiceManifest>,
 }
 
 /// Convert f64 timestamp to a sortable u64 key for the BTreeMap.
@@ -70,6 +72,7 @@ impl HubState {
             event_log: Vec::new(),
             schedule: BTreeMap::new(),
             param_state: HashMap::new(),
+            manifests: HashMap::new(),
         }
     }
 
@@ -86,7 +89,7 @@ impl HubState {
         self.event_log.push(msg);
     }
 
-    /// Remove a voice and all its associated state (subscriptions, params).
+    /// Remove a voice and all its associated state (subscriptions, params, manifest).
     fn remove_voice(&mut self, voice_id: VoiceId, reason: &str) {
         self.log(format!("Voice {voice_id} disconnected ({reason})"));
         self.voices.remove(&voice_id);
@@ -98,6 +101,8 @@ impl HubState {
         }
         // Clean up empty schedule entries.
         self.schedule.retain(|_, actions| !actions.is_empty());
+        // Remove manifest for this voice.
+        self.manifests.remove(&voice_id);
     }
 }
 
@@ -391,6 +396,67 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                         if let Some(msg) = log_msg {
                             st.log(msg);
                         }
+                    }
+
+                    MSG_SET_MANIFEST => {
+                        let map = payload_map(&msg);
+                        let manifest_value = get_value(&map, "manifest").unwrap_or(Value::Null);
+                        let mut st = state.lock().await;
+                        match VoiceManifest::from_value(&manifest_value) {
+                            Some(manifest) => {
+                                st.log(format!(
+                                    "Voice {voice_id}: manifest set (\"{}\")",
+                                    manifest.name
+                                ));
+                                st.manifests.insert(voice_id, manifest);
+                            }
+                            None => {
+                                let err_msg = error(
+                                    ERR_MALFORMED_MANIFEST,
+                                    "set_manifest: manifest is not a valid manifest map",
+                                );
+                                if let Some(voice) = st.voices.get(&voice_id) {
+                                    let _ = voice.tx.send(err_msg).await;
+                                }
+                                st.log(format!(
+                                    "Voice {voice_id}: malformed set_manifest rejected"
+                                ));
+                            }
+                        }
+                    }
+
+                    MSG_PATCH_MANIFEST => {
+                        let map = payload_map(&msg);
+                        let patch_value = get_value(&map, "patch").unwrap_or(Value::Null);
+                        let mut st = state.lock().await;
+                        let patch_map = match patch_value {
+                            Value::Map(m) => m,
+                            _ => {
+                                let err_msg = error(
+                                    ERR_MALFORMED_MANIFEST,
+                                    "patch_manifest: patch must be a map",
+                                );
+                                if let Some(voice) = st.voices.get(&voice_id) {
+                                    let _ = voice.tx.send(err_msg).await;
+                                }
+                                st.log(format!(
+                                    "Voice {voice_id}: malformed patch_manifest rejected (not a map)"
+                                ));
+                                return;
+                            }
+                        };
+                        // Get or create the manifest, apply the patch, and capture the name.
+                        let name = {
+                            let manifest = st
+                                .manifests
+                                .entry(voice_id)
+                                .or_insert_with(VoiceManifest::default);
+                            manifest.apply_patch(&patch_map);
+                            manifest.name.clone()
+                        };
+                        st.log(format!(
+                            "Voice {voice_id}: manifest patched (\"{name}\")"
+                        ));
                     }
 
                     other => {

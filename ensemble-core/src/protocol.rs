@@ -26,7 +26,11 @@ pub use ensemble_protocol::{
     // Helper functions
     hello, welcome, disconnect, subscribe, unsubscribe, action, action_with_source,
     unset_param, clock_ping, clock_pong, error, update_name,
+    set_manifest, patch_manifest,
     get_field, get_string, get_integer, get_float, get_value,
     // Types
     VoiceId, PROTOCOL_VERSION,
 };
+
+// Re-export manifest types from ensemble-manifest.
+pub use ensemble_manifest::{RouteInfo, VoiceManifest};

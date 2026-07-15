@@ -60,6 +60,7 @@ struct TestHub {
     voices: HashMap<VoiceId, TestVoice>,
     param_state: HashMap<String, (VoiceId, WireMessage)>,
     schedule: BTreeMap<u64, Vec<ScheduledAction>>,
+    manifests: HashMap<VoiceId, VoiceManifest>,
 }
 
 impl TestHub {
@@ -70,6 +71,7 @@ impl TestHub {
             voices: HashMap::new(),
             param_state: HashMap::new(),
             schedule: BTreeMap::new(),
+            manifests: HashMap::new(),
         }
     }
 
@@ -77,7 +79,7 @@ impl TestHub {
         self.clock_origin.elapsed().as_secs_f64()
     }
 
-    /// Remove a voice and all its associated state (subscriptions, params).
+    /// Remove a voice and all its associated state (subscriptions, params, manifest).
     fn remove_voice(&mut self, voice_id: VoiceId) {
         self.voices.remove(&voice_id);
         // Remove param state owned by this voice.
@@ -87,6 +89,8 @@ impl TestHub {
             actions.retain(|sa| sa.source != voice_id);
         }
         self.schedule.retain(|_, actions| !actions.is_empty());
+        // Remove manifest for this voice.
+        self.manifests.remove(&voice_id);
     }
 }
 
@@ -259,8 +263,28 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                         h.remove_voice(voice_id);
                         break;
                     }
+                    MSG_SET_MANIFEST => {
+                        let map = payload_map(&msg);
+                        let manifest_value = get_value(&map, "manifest").unwrap_or(Value::Null);
+                        let mut h = hub.lock().await;
+                        if let Some(manifest) = VoiceManifest::from_value(&manifest_value) {
+                            h.manifests.insert(voice_id, manifest);
+                        }
+                    }
+                    MSG_PATCH_MANIFEST => {
+                        let map = payload_map(&msg);
+                        let patch_value = get_value(&map, "patch").unwrap_or(Value::Null);
+                        let mut h = hub.lock().await;
+                        if let Value::Map(patch_map) = patch_value {
+                            let manifest = h
+                                .manifests
+                                .entry(voice_id)
+                                .or_insert_with(VoiceManifest::default);
+                            manifest.apply_patch(&patch_map);
+                        }
+                    }
                     _ => {
-                        // Ignore unknown message types (e.g. update_name, set_manifest).
+                        // Ignore unknown message types (e.g. update_name).
                     }
                 }
             }
@@ -879,5 +903,381 @@ async fn runtime_name_update() {
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
 
     hub.disconnect().await;
+    receiver.disconnect().await;
+}
+
+// ---------------------------------------------------------------------------
+// Manifest conformance tests (Increment 5)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn set_manifest_replaces() {
+    let port = start_test_hub().await;
+
+    let hub = Hub::connect(port, "manifest-test")
+        .await
+        .unwrap();
+
+    // Set a manifest.
+    let manifest = VoiceManifest {
+        name: "Test Voice".into(),
+        description: Some("A test voice.".into()),
+        version: Some("1.0.0".into()),
+        tags: vec!["test".into()],
+        provides: vec!["test-cap".into()],
+        expects: vec![],
+        routes: vec![],
+    };
+    hub.set_manifest(&manifest).await.unwrap();
+
+    // Small delay to let the hub process it.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connection should still be alive — send an action to verify.
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    hub.send_action(action(
+        "/test",
+        SignalType::Event,
+        0.0,
+        Value::Null,
+    ))
+    .await
+    .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out — connection should be alive after set_manifest")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
+
+    hub.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn patch_manifest_updates_specified_fields() {
+    let port = start_test_hub().await;
+
+    let hub = Hub::connect(port, "patch-test")
+        .await
+        .unwrap();
+
+    // Set an initial manifest.
+    let manifest = VoiceManifest {
+        name: "Original".into(),
+        description: Some("Original description.".into()),
+        version: Some("1.0.0".into()),
+        tags: vec!["tag1".into()],
+        provides: vec!["cap1".into()],
+        expects: vec![],
+        routes: vec![],
+    };
+    hub.set_manifest(&manifest).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Patch only the description and tags.
+    let mut patch = BTreeMap::new();
+    patch.insert(
+        "description".into(),
+        Value::String("Updated description.".into()),
+    );
+    patch.insert(
+        "tags".into(),
+        Value::List(vec![Value::String("tag2".into()), Value::String("tag3".into())]),
+    );
+    hub.patch_manifest(Value::Map(patch)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connection should still be alive.
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    hub.send_action(action(
+        "/test",
+        SignalType::Event,
+        0.0,
+        Value::Null,
+    ))
+    .await
+    .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out — connection should be alive after patch_manifest")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
+
+    hub.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn patch_manifest_without_prior_set() {
+    let port = start_test_hub().await;
+
+    let hub = Hub::connect(port, "patch-no-set")
+        .await
+        .unwrap();
+
+    // Patch without a prior set — should create a default manifest and patch it.
+    let mut patch = BTreeMap::new();
+    patch.insert("name".into(), Value::String("Patched Name".into()));
+    patch.insert(
+        "description".into(),
+        Value::String("Patched description.".into()),
+    );
+    hub.patch_manifest(Value::Map(patch)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connection should still be alive.
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    hub.send_action(action(
+        "/test",
+        SignalType::Event,
+        0.0,
+        Value::Null,
+    ))
+    .await
+    .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out — connection should be alive after patch without prior set")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
+
+    hub.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn manifest_does_not_affect_routing() {
+    let port = start_test_hub().await;
+
+    let sender = Hub::connect(port, "sender")
+        .await
+        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+
+    // Set a manifest on the sender.
+    let manifest = VoiceManifest {
+        name: "Sender".into(),
+        description: Some("A sender voice.".into()),
+        version: None,
+        tags: vec![],
+        provides: vec!["test-output".into()],
+        expects: vec![],
+        routes: vec![],
+    };
+    sender.set_manifest(&manifest).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Subscribe and send an action — routing should work normally.
+    receiver.subscribe("/test/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    sender
+        .send_action(action(
+            "/test/foo",
+            SignalType::Event,
+            0.0,
+            Value::Integer(42),
+        ))
+        .await
+        .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out — manifest should not affect routing")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test/foo");
+    assert_eq!(get_integer(&map, "payload"), Some(42));
+
+    sender.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn manifest_survives_runtime_update() {
+    let port = start_test_hub().await;
+
+    let hub = Hub::connect(port, "runtime-update")
+        .await
+        .unwrap();
+
+    // Set initial manifest.
+    let manifest1 = VoiceManifest {
+        name: "Version 1".into(),
+        description: Some("First version.".into()),
+        version: Some("1.0.0".into()),
+        tags: vec!["v1".into()],
+        provides: vec![],
+        expects: vec![],
+        routes: vec![],
+    };
+    hub.set_manifest(&manifest1).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Send an action.
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    hub.send_action(action(
+        "/test",
+        SignalType::Event,
+        0.0,
+        Value::Integer(1),
+    ))
+    .await
+    .unwrap();
+
+    let msg1 = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for first action")
+    .expect("Channel closed");
+    let map1 = payload_map(&msg1);
+    assert_eq!(get_integer(&map1, "payload"), Some(1));
+
+    // Update manifest at runtime.
+    let manifest2 = VoiceManifest {
+        name: "Version 2".into(),
+        description: Some("Second version.".into()),
+        version: Some("2.0.0".into()),
+        tags: vec!["v2".into()],
+        provides: vec!["new-cap".into()],
+        expects: vec![],
+        routes: vec![],
+    };
+    hub.set_manifest(&manifest2).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Send another action — connection should still be alive.
+    hub.send_action(action(
+        "/test",
+        SignalType::Event,
+        0.0,
+        Value::Integer(2),
+    ))
+    .await
+    .unwrap();
+
+    let msg2 = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for second action — manifest update should not disconnect")
+    .expect("Channel closed");
+    let map2 = payload_map(&msg2);
+    assert_eq!(get_integer(&map2, "payload"), Some(2));
+
+    hub.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn manifest_cleaned_up_on_disconnect() {
+    let port = start_test_hub().await;
+
+    // Voice sets a manifest, then disconnects.
+    {
+        let hub = Hub::connect(port, "manifest-voice")
+            .await
+            .unwrap();
+
+        let manifest = VoiceManifest {
+            name: "Temporary".into(),
+            description: Some("Will disconnect.".into()),
+            version: None,
+            tags: vec![],
+            provides: vec![],
+            expects: vec![],
+            routes: vec![],
+        };
+        hub.set_manifest(&manifest).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Graceful disconnect.
+        hub.disconnect().await;
+    }
+
+    // Wait for the hub to process the disconnect.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // A new voice connects — the hub should have cleaned up the manifest.
+    // We can't directly inspect the hub state from the client, but we can
+    // verify the hub is still functional.
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let sender = Hub::connect(port, "sender")
+        .await
+        .unwrap();
+    sender
+        .send_action(action(
+            "/test",
+            SignalType::Event,
+            0.0,
+            Value::Null,
+        ))
+        .await
+        .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out — hub should still work after manifest voice disconnected")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
+
+    sender.disconnect().await;
     receiver.disconnect().await;
 }

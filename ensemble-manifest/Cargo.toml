@@ -1,0 +1,9 @@
+[package]
+name = "ensemble-manifest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ensemble-values = { path = "../ensemble-values" }
+ensemble-protocol = { path = "../ensemble-protocol" }

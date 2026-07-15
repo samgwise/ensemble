@@ -357,6 +357,30 @@ pub fn update_name(name: impl Into<String>) -> WireMessage {
     )
 }
 
+/// Create a set_manifest message. The manifest is passed as a raw `Value::Map`.
+pub fn set_manifest(manifest: Value) -> WireMessage {
+    WireMessage::new(
+        MSG_SET_MANIFEST,
+        Value::Map({
+            let mut m = BTreeMap::new();
+            m.insert("manifest".into(), manifest);
+            m
+        }),
+    )
+}
+
+/// Create a patch_manifest message. The patch is passed as a raw `Value::Map`.
+pub fn patch_manifest(patch: Value) -> WireMessage {
+    WireMessage::new(
+        MSG_PATCH_MANIFEST,
+        Value::Map({
+            let mut m = BTreeMap::new();
+            m.insert("patch".into(), patch);
+            m
+        }),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Payload extraction helpers
 // ---------------------------------------------------------------------------
