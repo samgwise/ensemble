@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ensemble_core::codec;
-use ensemble_core::pattern::matches_any;
 use ensemble_core::protocol::*;
+use ensemble_routing::{matches_any, Pattern};
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, Mutex};
 struct TestVoice {
     id: VoiceId,
     subscriptions: Vec<String>,
+    subscription_patterns: Vec<Pattern>,
     tx: mpsc::Sender<Message>,
 }
 
@@ -63,7 +64,7 @@ async fn route_action(h: &TestHub, source: VoiceId, action: &Action) {
         action: action.clone(),
     };
     for voice in h.voices.values() {
-        if voice.id != source && matches_any(&voice.subscriptions, &action.address) {
+        if voice.id != source && matches_any(&voice.subscription_patterns, &action.address) {
             let _ = voice.tx.send(msg.clone()).await;
         }
     }
@@ -82,6 +83,13 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
         _ => return,
     };
 
+    // Parse subscription patterns.
+    let subscription_patterns: Vec<Pattern> = hello
+        .subscriptions
+        .iter()
+        .filter_map(|s| Pattern::parse(s).ok())
+        .collect();
+
     let (tx, mut rx) = mpsc::channel::<Message>(256);
     let voice_id;
     {
@@ -95,6 +103,7 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
             TestVoice {
                 id: voice_id,
                 subscriptions: hello.subscriptions.clone(),
+                subscription_patterns,
                 tx: tx.clone(),
             },
         );
@@ -103,8 +112,13 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
         let _ = codec::write_message(&mut writer, &welcome).await;
 
         // Replay param state to the new voice.
+        let patterns: Vec<Pattern> = h
+            .voices
+            .get(&voice_id)
+            .map(|v| v.subscription_patterns.clone())
+            .unwrap_or_default();
         for (source, action) in h.param_state.values() {
-            if matches_any(&hello.subscriptions, &action.address) {
+            if matches_any(&patterns, &action.address) {
                 let msg = Message::ActionMessage {
                     source: *source,
                     action: action.clone(),
@@ -269,8 +283,8 @@ async fn two_voices_exchange_actions() {
 async fn wildcard_subscription_routes_subtree() {
     let port = start_test_hub().await;
 
-    // Voice A subscribes to /synth/* — should receive anything under /synth/.
-    let mut hub_a = Hub::connect(port, "listener", vec!["/synth/*".into()])
+    // Voice A subscribes to /synth/** — should receive anything under /synth/.
+    let mut hub_a = Hub::connect(port, "listener", vec!["/synth/**".into()])
         .await
         .unwrap();
 

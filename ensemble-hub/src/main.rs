@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use ensemble_core::protocol::*;
 use ensemble_core::{codec, CodecError};
+use ensemble_routing::{matches_any, Pattern};
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
@@ -18,6 +19,8 @@ use tokio::sync::{mpsc, Mutex};
 struct ConnectedVoice {
     id: VoiceId,
     capabilities: VoiceCapabilities,
+    /// Parsed subscription patterns for routing.
+    subscription_patterns: Vec<Pattern>,
     /// Channel to send messages to this voice's writer task.
     tx: mpsc::Sender<Message>,
 }
@@ -110,6 +113,21 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
         }
     };
 
+    // Parse subscription patterns from Hello.
+    let subscription_patterns: Vec<Pattern> = hello
+        .subscriptions
+        .iter()
+        .filter_map(|s| match Pattern::parse(s) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                // Log invalid patterns but don't reject the connection.
+                // (Protocol-level error responses are a future increment.)
+                eprintln!("Invalid subscription pattern '{s}': {e}");
+                None
+            }
+        })
+        .collect();
+
     // Register voice.
     let (tx, mut rx) = mpsc::channel::<Message>(256);
     let voice_id;
@@ -124,6 +142,7 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
             ConnectedVoice {
                 id: voice_id,
                 capabilities: hello.clone(),
+                subscription_patterns,
                 tx: tx.clone(),
             },
         );
@@ -142,8 +161,13 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
         }
 
         // Replay current param state to the new voice.
+        let patterns: Vec<Pattern> = st
+            .voices
+            .get(&voice_id)
+            .map(|v| v.subscription_patterns.clone())
+            .unwrap_or_default();
         for (source, action) in st.param_state.values() {
-            if matches_any(&hello.subscriptions, &action.address) {
+            if matches_any(&patterns, &action.address) {
                 let msg = Message::ActionMessage {
                     source: *source,
                     action: action.clone(),
@@ -206,18 +230,43 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 
             Ok(Message::Subscribe { patterns }) => {
                 let mut st = state.lock().await;
+                let mut invalid_patterns = Vec::new();
                 if let Some(voice) = st.voices.get_mut(&voice_id) {
-                    voice.capabilities.subscriptions.extend(patterns);
+                    for pat_str in &patterns {
+                        match Pattern::parse(pat_str) {
+                            Ok(p) => {
+                                voice.subscription_patterns.push(p);
+                                voice.capabilities.subscriptions.push(pat_str.clone());
+                            }
+                            Err(e) => {
+                                invalid_patterns.push(format!(
+                                    "invalid subscribe pattern '{pat_str}': {e}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                // Log invalid patterns after releasing the mutable borrow.
+                for msg in invalid_patterns {
+                    st.log(format!("Voice {voice_id}: {msg}"));
                 }
             }
 
             Ok(Message::Unsubscribe { patterns }) => {
                 let mut st = state.lock().await;
                 if let Some(voice) = st.voices.get_mut(&voice_id) {
-                    voice
-                        .capabilities
-                        .subscriptions
-                        .retain(|s| !patterns.contains(s));
+                    // Remove from string list and parsed patterns in tandem.
+                    for pat_str in &patterns {
+                        if let Some(pos) = voice
+                            .capabilities
+                            .subscriptions
+                            .iter()
+                            .position(|s| s == pat_str)
+                        {
+                            voice.capabilities.subscriptions.remove(pos);
+                            voice.subscription_patterns.remove(pos);
+                        }
+                    }
                 }
             }
 
@@ -252,9 +301,6 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
     writer_handle.abort();
 }
 
-// Pattern matching is provided by ensemble_core::pattern.
-use ensemble_core::pattern::matches_any;
-
 /// Route an action to all subscribed voices (except the sender).
 async fn route_action(st: &HubState, source: VoiceId, action: &Action) {
     let msg = Message::ActionMessage {
@@ -265,7 +311,7 @@ async fn route_action(st: &HubState, source: VoiceId, action: &Action) {
         if voice.id == source {
             continue;
         }
-        if matches_any(&voice.capabilities.subscriptions, &action.address) {
+        if matches_any(&voice.subscription_patterns, &action.address) {
             let _ = voice.tx.send(msg.clone()).await;
         }
     }

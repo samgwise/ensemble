@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "ensemble-core",
+    "ensemble-routing",
     "ensemble-hub",
     "ensemble-client", "ensemble-bridge-midi",
 ]

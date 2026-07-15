@@ -11,3 +11,4 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+ensemble-routing = { path = "../ensemble-routing" }
