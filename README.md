@@ -72,40 +72,53 @@ use ensemble_core::protocol::*;
 
 #[tokio::main]
 async fn main() {
-    let hub = Hub::connect(7331, "my-tool", vec!["/midi/in/*".into()])
+    let mut hub = Hub::connect(7331, "my-tool")
         .await
         .unwrap();
 
+    // Subscribe to MIDI input.
+    hub.subscribe("/midi/in/*").await.unwrap();
+
     // Play middle C for 500ms at velocity 80 on channel 0.
-    hub.send_action(Action {
-        address: "/midi/play".into(),
-        signal_type: SignalType::Event,
-        timestamp: 0.0,
-        payload: Payload::Tuple(vec![
-            Value::I32(0),    // channel
-            Value::I32(60),   // note (middle C)
-            Value::I32(80),   // velocity
-            Value::F32(0.5),  // duration in seconds
+    hub.send_action(action(
+        "/midi/play",
+        SignalType::Event,
+        0.0,
+        Value::Tuple(vec![
+            Value::Integer(0),    // channel
+            Value::Integer(60),   // note (middle C)
+            Value::Integer(80),   // velocity
+            Value::Float(FloatValue::new(0.5)),  // duration in seconds
         ]),
-    })
+    ))
     .await
     .unwrap();
 
     // Schedule a note 1 second from now.
     let future = hub.now().await + 1.0;
-    hub.send_action(Action {
-        address: "/midi/play".into(),
-        signal_type: SignalType::Event,
-        timestamp: future,
-        payload: Payload::Tuple(vec![
-            Value::I32(0),
-            Value::I32(64),   // E4
-            Value::I32(80),
-            Value::F32(0.5),
+    hub.send_action(action(
+        "/midi/play",
+        SignalType::Event,
+        future,
+        Value::Tuple(vec![
+            Value::Integer(0),
+            Value::Integer(64),   // E4
+            Value::Integer(80),
+            Value::Float(FloatValue::new(0.5)),
         ]),
-    })
+    ))
     .await
     .unwrap();
+
+    // Receive actions routed to us.
+    if let Some(msg) = hub.recv_action().await {
+        let map = match &msg.payload {
+            Value::Map(m) => m,
+            _ => return,
+        };
+        let address = get_string(map, "address").unwrap_or_default();
+        println!("Received: {}", address);
+    }
 
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     hub.disconnect().await;
@@ -126,31 +139,31 @@ async fn main() {
 
 **`/midi/play`** — Play a note with automatic note-off scheduling.
 
-Payload: `(channel: i32, note: i32, velocity: i32, duration_secs: f32)`
+Payload: `(channel: Integer, note: Integer, velocity: Integer, duration_secs: Float)`
 
 The bridge sends note-on immediately (or at the action's timestamp if scheduled) and note-off after `duration_secs`. Uses a mutex counter so retriggering the same note cleanly cancels the previous note-off.
 
 **`/midi/cancel`** — Cancel a pending note-off.
 
-Payload: `(channel: i32, note: i32)`
+Payload: `(channel: Integer, note: Integer)`
 
 Bumps the mutex counter, invalidating any pending note-off for that channel/note.
 
 **`/midi/cc`** — Send a MIDI Control Change.
 
-Payload: `(channel: i32, cc_number: i32, value: i32)`
+Payload: `(channel: Integer, cc_number: Integer, value: Integer)`
 
 **`/midi/in/note-on`** — Received from MIDI input.
 
-Payload: `(channel: i32, note: i32, velocity: i32)`
+Payload: `(channel: Integer, note: Integer, velocity: Integer)`
 
 **`/midi/in/note-off`** — Received from MIDI input.
 
-Payload: `(channel: i32, note: i32)`
+Payload: `(channel: Integer, note: Integer)`
 
 **`/midi/in/cc`** — Received from MIDI input.
 
-Payload: `(channel: i32, cc_number: i32, value: i32)`
+Payload: `(channel: Integer, cc_number: Integer, value: Integer)`
 
 ## Clock Synchronisation
 
@@ -170,10 +183,51 @@ MessagePack was chosen for cross-language support — native implementations exi
 
 | Crate | Type | Description |
 |-------|------|-------------|
-| `ensemble-core` | Library | Shared types, wire protocol, clock sync algorithm, pattern matching |
-| `ensemble-hub` | Binary | Central router with TUI |
+| `ensemble-core` | Library | Shared types, wire protocol, codec |
+| `ensemble-values` | Library | Value model (10 types: Null, Bool, Integer, Float, String, Binary, Tuple, List, Map, TypedBinary) |
+| `ensemble-routing` | Library | Pattern matching and address routing |
+| `ensemble-protocol` | Library | WireMessage envelope and message types |
+| `ensemble-manifest` | Library | Voice manifest types |
+| `ensemble-clock` | Library | Clock synchronization algorithm |
+| `ensemble-hub` | Library + Binary | Central router (headless binary) |
+| `ensemble-hub-tui` | Binary | Hub TUI with voice browser, action monitor, param inspector |
 | `ensemble-client` | Library | Client library for building tools |
 | `ensemble-bridge-midi` | Binary | MIDI I/O bridge |
+| `ensemble-test-fixtures` | Library | YAML conformance test fixtures |
+| `ensemble-conformance` | Test | Conformance test harness |
+
+## Hub TUI
+
+The hub includes a comprehensive TUI for monitoring and debugging:
+
+- **Voice Browser**: View connected voices, subscriptions, and connection times
+- **Manifest Browser**: Inspect voice manifests and capabilities
+- **Action Monitor**: Real-time view of routed actions
+- **Param Inspector**: View current param state and owners
+- **Scheduling Monitor**: See scheduled actions and dispatch times
+- **Log Viewer**: Hub event log
+- **Route Tester**: Test pattern matching interactively
+
+Navigate with number keys (1-7) or Tab. Press `q` to quit.
+
+## Conformance Testing
+
+Ensemble includes a comprehensive conformance test suite to ensure protocol compliance:
+
+```sh
+cargo test -p ensemble-conformance
+```
+
+The test suite covers:
+- **Routing**: Pattern matching, invalid patterns, namespace enforcement
+- **Values**: Type preservation, type discrimination
+- **Protocol**: Error codes, action structure
+- **Lifecycle**: Voice registration, disconnect cleanup
+- **Scheduling**: Dispatch timing, activation time retention
+- **Params**: State management, scoping
+- **Manifests**: Registration, patching, routing independence
+
+Test fixtures are stored as language-neutral YAML files in `ensemble-test-fixtures/fixtures/`, making it easy to port the conformance suite to other implementations.
 
 ## Configuration
 

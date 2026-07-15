@@ -1,268 +1,91 @@
-Honestly, very few fundamental ones.
+With the reference implementation complete (all 9 increments), most protocol questions are now resolved through implementation decisions.
 
-We've reached the stage where most remaining questions feel like implementation policy rather than protocol definition. That's a good sign.
+## Resolved Questions
 
-Open Questions I Would Still Track
-1. Manifest Patch Semantics
+### 1. Manifest Patch Semantics — RESOLVED
 
-We've agreed on:
+**Decision**: Field replacement patches.
 
-SetManifest
-PatchManifest
+Implemented in `ensemble-manifest`. `patch_manifest` replaces list fields (`tags`, `provides`, `expects`, `routes`) entirely when present. String fields are updated individually. `null` clears optional fields. This is simple and sufficient for the use case.
 
+### 2. Tuple Encoding — RESOLVED
 
-but not the exact patch model.
+**Decision**: MessagePack ext type distinction.
 
-Options:
+Implemented in `ensemble-values`. `Tuple` and `List` are distinct variants in the `Value` enum. They serialize differently through MessagePack (Tuple uses ext type, List uses array). This preserves the semantic distinction through the wire format.
 
-Field replacement
-{
-  "routes": [...]
-}
+### 3. Hub Event Payloads — RESOLVED
 
+**Decision**: Map-based payloads.
 
-replaces routes.
+Implemented in `ensemble-hub`. Hub events use `Value::Map` with named fields:
+- `/hub/voice/joined`: `{voice_id: Integer, name: String}`
+- `/hub/voice/left`: `{voice_id: Integer, name: String}`
+- `/hub/voice/renamed`: `{voice_id: Integer, old_name: String, new_name: String}`
+- `/hub/manifest/set`: `{voice_id: Integer, manifest: Value}`
+- `/hub/manifest/updated`: `{voice_id: Integer, patch: Value}`
 
-Simple.
+Maps are easier to evolve than positional tuples.
 
-Operation-based patching
-{
-  "op": "add_route",
-  ...
-}
+### 4. Conformance Testing — RESOLVED
 
+**Decision**: YAML fixtures with language-neutral format.
 
-More efficient, more complex.
+Implemented in `ensemble-test-fixtures` and `ensemble-conformance`. 14 YAML fixture files covering routing, values, protocol, lifecycle, scheduling, params, and manifests. Fixtures use simple YAML (no anchors, tags, or complex keys) for easy conversion to JSON or parsing by other languages.
 
-JSON-Patch style
+## Remaining Open Questions
 
-Probably overkill.
+### 5. Hub-to-Hub Semantic Policies
 
-My current preference would be:
+Hub Bridge exists as a concept but is not yet implemented. Open questions:
 
-Start with field replacement patches. Keep it simple.
+- **Param replay forwarding**: Should retained Params be replayed, ignored, or configurable when bridging between hubs?
+- **Loop prevention**: Hub A ↔ Hub B can easily produce cycles.
 
-This is probably the largest unresolved protocol detail.
+This is the largest architectural question remaining. Fortunately it lives in bridge design, not core protocol.
 
-2. Tuple Encoding
+### 6. Capability Taxonomy
 
-Conceptually we've settled:
+The mechanism is settled (`provides` / `expects`) but not conventions. Who defines capability strings like `midi-output` or `midi-input`?
 
-Tuple != List
+Likely approach: Start with a recommended convention list rather than a formal registry.
 
+### 7. Toolbox Scope
 
-but not how that survives serialization.
+Is the Ensemble Toolbox a collection of separate voice processes, or one application hosting multiple utility modules (Mapper, Filter, Scaler, Router, Logger)?
 
-Since MessagePack only has arrays, eventually we need an encoding convention.
+Preferred approach: One runtime, many utility modules — consistent with the hub philosophy.
 
-Possible approaches:
+## Closed Questions
 
-Tagged representation
-Tuple
-
-
-becomes an internal Ensemble encoding.
-
-MessagePack Extension
-
-Probably not desirable.
-
-Ensemble Value Envelope
-
-Potentially:
-
-{
-  "kind": "tuple",
-  "value": [...]
-}
-
-
-internally.
-
-I wouldn't solve this yet, but it will matter during implementation.
-
-3. Hub-to-Hub Semantic Policies
-
-We know:
-
-Hub Bridge
-
-
-exists.
-
-We haven't decided:
-
-Param replay forwarding
-
-Should retained Params be:
-
-replayed?
-ignored?
-configurable?
-
-Loop prevention
-Hub A
- ↔
-Hub B
-
-
-can easily produce cycles.
-
-This is probably the largest architectural question remaining.
-
-Fortunately it lives in bridge design, not core protocol.
-
-4. Capability Taxonomy
-
-The mechanism is settled:
-
-provides
-expects
-
-
-but not conventions.
-
-Example:
-
-midi-output
-midi-input
-
-
-Who defines these?
-
-Options:
-
-Completely organic
-
-Community evolves terminology.
-
-Recommended convention list
-
-Probably my preference.
-
-Formal registry
-
-Too early.
-
-I'd be inclined to start a:
-
-Recommended Capabilities
-
-
-document later rather than putting it into the protocol.
-
-5. Hub Event Payloads
-
-We created:
-
-/hub/voice/joined
-/hub/voice/left
-
-
-but not formal payload schemas.
-
-For example:
-
-(voice_id, name)
-
-
-vs
-
-{
-  "voice_id": 42,
-  "name": "Sequencer"
-}
-
-
-I suspect maps will ultimately win because they're easier to evolve.
-
-6. Toolbox Scope
-
-This is more of a product question.
-
-The idea has emerged naturally:
-
-Ensemble Toolbox
-
-
-containing:
-
-Mapper
-Filter
-Scaler
-Router
-Logger
-
-
-Open question:
-
-Is Toolbox a collection of voices, or one application hosting multiple utilities?
-
-I actually like your proposal:
-
-One runtime, many utility modules.
-
-It feels consistent with the hub philosophy.
-
-Questions I'd Explicitly Declare Closed
-
-These all feel settled:
+All of the following are settled through the reference implementation:
 
 ✅ Routing syntax
-
 ✅ UTF-8 everywhere
-
 ✅ Capture semantics
-
-✅ Value types
-
+✅ Value types (all 10)
 ✅ TypedBinary
-
+✅ Tuple vs List distinction
 ✅ Param ownership
-
 ✅ Param replay
-
 ✅ Explicit unset
-
 ✅ Shared clock
-
 ✅ Timestamp semantics
-
 ✅ FIFO guarantees
-
+✅ Activation-time retention
 ✅ Manifest architecture
-
-✅ Lifecycle
-
+✅ Manifest patch semantics (field replacement)
+✅ Lifecycle (connect, disconnect, cleanup)
 ✅ Voice identity
-
 ✅ Wire protocol structure
-
+✅ Hub event payloads (Map-based)
+✅ Reserved /hub/ namespace
 ✅ Bridge philosophy
-
 ✅ Capability hints
+✅ Hub observability (TUI + hub events)
+✅ Conformance suite (YAML fixtures)
+✅ Hub / TUI separation
 
-✅ Hub observability direction
+## Looking Forward
 
-✅ Conformance suite philosophy
-
-The One Thing I'd Watch Closely
-
-If I were starting implementation tomorrow, the single area I'd expect to evolve based on real-world experience is:
-
-Manifests
-
-
-Not because the design is wrong, but because once people start building:
-
-MIDI bridges
-DAW integrations
-live coding tools
-Max patches
-generative systems
-
-you'll discover what metadata users actually find valuable.
-
-Everything else feels surprisingly stable.
-
-In fact, I think the current state of the design is strong enough that I'd be comfortable moving from specification into implementation planning. The next major discoveries are likely to come from building the first hub, first Rust client, and first bridge rather than from more protocol design work.
+The design is stable. The next major discoveries will come from building real tools and bridges rather than from more protocol design work. The area most likely to evolve based on real-world experience is manifests — not because the design is wrong, but because once people build MIDI bridges, DAW integrations, live coding tools, and Max patches, they'll discover what metadata users actually find valuable.
