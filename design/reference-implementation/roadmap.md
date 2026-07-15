@@ -70,7 +70,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 3. Protocol messages — commit: 291c6ec
 - [x] 4. Lifecycle — commit: 8c6dce0
 - [x] 5. Manifest — commit: 4ced5b3
-- [x] 6. Scheduling — commit: _
+- [x] 6. Scheduling — commit: 12c7b7f
 - [ ] 7. Observability and hub events — commit: _
 - [ ] 8. Hub / TUI split — commit: _
 - [ ] 9. Conformance harness — commit: _
