@@ -234,6 +234,7 @@ dependencies = [
 name = "ensemble-core"
 version = "0.1.0"
 dependencies = [
+ "ensemble-values",
  "rmp-serde",
  "serde",
  "thiserror",
@@ -257,6 +258,14 @@ dependencies = [
 [[package]]
 name = "ensemble-routing"
 version = "0.1.0"
+
+[[package]]
+name = "ensemble-values"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
+]
 
 [[package]]
 name = "equivalent"

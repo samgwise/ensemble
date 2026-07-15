@@ -22,7 +22,7 @@
 //!         address: "/my-tool/ping".into(),
 //!         signal_type: SignalType::Event,
 //!         timestamp: 0.0,
-//!         payload: Payload::None,
+//!         payload: Value::Null,
 //!     }).await.unwrap();
 //!
 //!     // Schedule an action 1 second in the future.
@@ -31,7 +31,7 @@
 //!         address: "/my-tool/delayed".into(),
 //!         signal_type: SignalType::Event,
 //!         timestamp: future_time,
-//!         payload: Payload::Single(Value::String("g'day".into())),
+//!         payload: Value::String("g'day".into()),
 //!     }).await.unwrap();
 //!
 //!     // Receive actions routed to us.

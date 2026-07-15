@@ -66,23 +66,23 @@ fn spawn_midi_output(
 // ---------------------------------------------------------------------------
 
 /// Extract (channel, note, velocity, duration_secs) from a /midi/play payload.
-fn parse_play_payload(payload: &Payload) -> Option<(u8, u8, u8, f64)> {
+fn parse_play_payload(payload: &Value) -> Option<(u8, u8, u8, f64)> {
     match payload {
-        Payload::Tuple(values) if values.len() >= 4 => {
+        Value::Tuple(values) if values.len() >= 4 => {
             let channel = match &values[0] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             let note = match &values[1] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             let velocity = match &values[2] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             let duration = match &values[3] {
-                Value::F32(v) => *v as f64,
+                Value::Float(v) => v.value(),
                 _ => return None,
             };
             Some((channel, note, velocity, duration))
@@ -92,15 +92,15 @@ fn parse_play_payload(payload: &Payload) -> Option<(u8, u8, u8, f64)> {
 }
 
 /// Extract (channel, note) from a /midi/cancel payload.
-fn parse_cancel_payload(payload: &Payload) -> Option<(u8, u8)> {
+fn parse_cancel_payload(payload: &Value) -> Option<(u8, u8)> {
     match payload {
-        Payload::Tuple(values) if values.len() >= 2 => {
+        Value::Tuple(values) if values.len() >= 2 => {
             let channel = match &values[0] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             let note = match &values[1] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             Some((channel, note))
@@ -110,19 +110,19 @@ fn parse_cancel_payload(payload: &Payload) -> Option<(u8, u8)> {
 }
 
 /// Extract (channel, cc_number, value) from a /midi/cc payload.
-fn parse_cc_payload(payload: &Payload) -> Option<(u8, u8, u8)> {
+fn parse_cc_payload(payload: &Value) -> Option<(u8, u8, u8)> {
     match payload {
-        Payload::Tuple(values) if values.len() >= 3 => {
+        Value::Tuple(values) if values.len() >= 3 => {
             let channel = match &values[0] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             let cc = match &values[1] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             let val = match &values[2] {
-                Value::I32(v) => *v as u8,
+                Value::Integer(v) => *v as u8,
                 _ => return None,
             };
             Some((channel, cc, val))
@@ -231,10 +231,10 @@ fn spawn_midi_input(
                         address: "/midi/in/note-on".into(),
                         signal_type: SignalType::Event,
                         timestamp: 0.0,
-                        payload: Payload::Tuple(vec![
-                            Value::I32(channel as i32),
-                            Value::I32(message[1] as i32),
-                            Value::I32(message[2] as i32),
+                        payload: Value::Tuple(vec![
+                            Value::Integer(channel as i64),
+                            Value::Integer(message[1] as i64),
+                            Value::Integer(message[2] as i64),
                         ]),
                     })
                 }
@@ -244,9 +244,9 @@ fn spawn_midi_input(
                         address: "/midi/in/note-off".into(),
                         signal_type: SignalType::Event,
                         timestamp: 0.0,
-                        payload: Payload::Tuple(vec![
-                            Value::I32(channel as i32),
-                            Value::I32(message[1] as i32),
+                        payload: Value::Tuple(vec![
+                            Value::Integer(channel as i64),
+                            Value::Integer(message[1] as i64),
                         ]),
                     })
                 }
@@ -256,10 +256,10 @@ fn spawn_midi_input(
                         address: "/midi/in/cc".into(),
                         signal_type: SignalType::Event,
                         timestamp: 0.0,
-                        payload: Payload::Tuple(vec![
-                            Value::I32(channel as i32),
-                            Value::I32(message[1] as i32),
-                            Value::I32(message[2] as i32),
+                        payload: Value::Tuple(vec![
+                            Value::Integer(channel as i64),
+                            Value::Integer(message[1] as i64),
+                            Value::Integer(message[2] as i64),
                         ]),
                     })
                 }

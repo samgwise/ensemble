@@ -94,7 +94,7 @@ mod tests {
                 address: "/synth/note".into(),
                 signal_type: SignalType::Event,
                 timestamp: 0.0,
-                payload: Payload::Single(Value::I32(60)),
+                payload: Value::Integer(60),
             },
         };
 
@@ -182,12 +182,12 @@ mod tests {
                 address: "/test".into(),
                 signal_type: SignalType::Param,
                 timestamp: 99.9,
-                payload: Payload::Tuple(vec![
-                    Value::F32(0.5),
-                    Value::I32(-42),
+                payload: Value::Tuple(vec![
+                    Value::Float(FloatValue::new(0.5)),
+                    Value::Integer(-42),
                     Value::Bool(true),
                     Value::String("g'day".into()),
-                    Value::Bytes(vec![0xDE, 0xAD]),
+                    Value::Binary(vec![0xDE, 0xAD]),
                 ]),
             },
         };
@@ -205,7 +205,7 @@ mod tests {
                 address: "/bang".into(),
                 signal_type: SignalType::Event,
                 timestamp: 0.0,
-                payload: Payload::None,
+                payload: Value::Null,
             },
         };
         let mut buf = Vec::new();

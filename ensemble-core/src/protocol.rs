@@ -5,6 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
+// Re-export the value model from ensemble-values.
+pub use ensemble_values::{FloatValue, Value};
+
 // ---------------------------------------------------------------------------
 // Signal types
 // ---------------------------------------------------------------------------
@@ -18,29 +21,6 @@ pub enum SignalType {
     Param,
     /// High-rate best-effort data. Dropped under congestion rather than queued.
     Stream,
-}
-
-// ---------------------------------------------------------------------------
-// Payload values
-// ---------------------------------------------------------------------------
-
-/// A typed value carried by an action.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Value {
-    F32(f32),
-    I32(i32),
-    Bool(bool),
-    String(String),
-    Bytes(Vec<u8>),
-}
-
-/// The payload of an action — either a single value or a tuple of values.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Payload {
-    Single(Value),
-    Tuple(Vec<Value>),
-    /// No payload (used for triggers/bangs).
-    None,
 }
 
 // ---------------------------------------------------------------------------
@@ -58,7 +38,7 @@ pub struct Action {
     /// Hub time for delivery. 0.0 means immediate.
     pub timestamp: f64,
     /// The data carried by this action.
-    pub payload: Payload,
+    pub payload: Value,
 }
 
 // ---------------------------------------------------------------------------

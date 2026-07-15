@@ -254,7 +254,7 @@ async fn two_voices_exchange_actions() {
             address: "/ping".into(),
             signal_type: SignalType::Event,
             timestamp: 0.0,
-            payload: Payload::Single(Value::String("hello".into())),
+            payload: Value::String("hello".into()),
         })
         .await
         .unwrap();
@@ -272,7 +272,7 @@ async fn two_voices_exchange_actions() {
     assert_eq!(action.address, "/ping");
     assert_eq!(
         action.payload,
-        Payload::Single(Value::String("hello".into()))
+        Value::String("hello".into())
     );
 
     hub_a.disconnect().await;
@@ -300,7 +300,7 @@ async fn wildcard_subscription_routes_subtree() {
             address: "/synth/voice/1/note".into(),
             signal_type: SignalType::Event,
             timestamp: 0.0,
-            payload: Payload::Single(Value::I32(60)),
+            payload: Value::Integer(60),
         })
         .await
         .unwrap();
@@ -339,7 +339,7 @@ async fn unsubscribed_voice_does_not_receive() {
             address: "/ping".into(),
             signal_type: SignalType::Event,
             timestamp: 0.0,
-            payload: Payload::None,
+            payload: Value::Null,
         })
         .await
         .unwrap();
@@ -401,7 +401,7 @@ async fn scheduled_action_delivered_after_delay() {
             address: "/scheduled".into(),
             signal_type: SignalType::Event,
             timestamp: future_time,
-            payload: Payload::Single(Value::String("delayed".into())),
+            payload: Value::String("delayed".into()),
         })
         .await
         .unwrap();
@@ -443,7 +443,7 @@ async fn param_state_replayed_to_late_joiner() {
             address: "/synth/cutoff".into(),
             signal_type: SignalType::Param,
             timestamp: 0.0,
-            payload: Payload::Single(Value::F32(0.7)),
+            payload: Value::Float(FloatValue::new(0.7)),
         })
         .await
         .unwrap();
@@ -467,7 +467,7 @@ async fn param_state_replayed_to_late_joiner() {
 
     assert_eq!(action.address, "/synth/cutoff");
     assert_eq!(action.signal_type, SignalType::Param);
-    assert_eq!(action.payload, Payload::Single(Value::F32(0.7)));
+    assert_eq!(action.payload, Value::Float(FloatValue::new(0.7)));
 
     hub_setter.disconnect().await;
     hub_late.disconnect().await;

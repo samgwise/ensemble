@@ -38,7 +38,7 @@ async fn main() {
             address: "/ping".into(),
             signal_type: SignalType::Event,
             timestamp: 0.0,
-            payload: Payload::Single(Value::String("hello from A!".into())),
+            payload: Value::String("hello from A!".into()),
         })
         .await
         .unwrap();
@@ -57,7 +57,7 @@ async fn main() {
                 address: "/pong".into(),
                 signal_type: SignalType::Event,
                 timestamp: 0.0,
-                payload: Payload::Single(Value::String("hello back from B!".into())),
+            payload: Value::String("hello back from B!".into()),
             })
             .await
             .unwrap();
