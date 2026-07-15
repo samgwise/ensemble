@@ -68,7 +68,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 1. Routing — commit: f458a86
 - [x] 2. Value model — commit: bfe4be8
 - [x] 3. Protocol messages — commit: 291c6ec
-- [x] 4. Lifecycle — commit: _
+- [x] 4. Lifecycle — commit: 8c6dce0
 - [ ] 5. Manifest — commit: _
 - [ ] 6. Scheduling — commit: _
 - [ ] 7. Observability and hub events — commit: _
