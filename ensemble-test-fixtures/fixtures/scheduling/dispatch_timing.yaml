@@ -1,0 +1,63 @@
+# Scheduling conformance fixtures — dispatch timing
+# These fixtures test immediate vs scheduled action dispatch.
+
+suite: scheduling
+name: dispatch_timing
+
+cases:
+  - name: immediate_dispatch
+    description: "Timestamp 0.0 dispatches immediately"
+    action:
+      address: "/test"
+      signal_type: "event"
+      timestamp: 0.0
+      payload:
+        type: "integer"
+        data: 1
+    expected_delivery: "immediate"
+
+  - name: past_timestamp_immediate
+    description: "Past timestamp dispatches immediately"
+    action:
+      address: "/test"
+      signal_type: "event"
+      timestamp: -5.0
+      payload:
+        type: "integer"
+        data: 2
+    expected_delivery: "immediate"
+
+  - name: future_timestamp_scheduled
+    description: "Future timestamp schedules delivery"
+    action:
+      address: "/test"
+      signal_type: "event"
+      timestamp_offset: 0.5
+      payload:
+        type: "integer"
+        data: 3
+    expected_delivery: "scheduled"
+    expected_delay_ms: 500
+
+  - name: fifo_ordering_same_timestamp
+    description: "Actions with same timestamp maintain FIFO order"
+    actions:
+      - address: "/test"
+        signal_type: "event"
+        timestamp: 0.0
+        payload:
+          type: "integer"
+          data: 0
+      - address: "/test"
+        signal_type: "event"
+        timestamp: 0.0
+        payload:
+          type: "integer"
+          data: 1
+      - address: "/test"
+        signal_type: "event"
+        timestamp: 0.0
+        payload:
+          type: "integer"
+          data: 2
+    expected_order: [0, 1, 2]

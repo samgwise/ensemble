@@ -1,0 +1,139 @@
+# Values conformance fixtures — type preservation
+# These fixtures test that all 10 value types round-trip correctly.
+
+suite: values
+name: type_preservation
+
+cases:
+  - name: null_value
+    description: "Null value round-trips"
+    value:
+      type: "null"
+    expected_type: "null"
+
+  - name: bool_true
+    description: "Boolean true round-trips"
+    value:
+      type: "bool"
+      data: true
+    expected_type: "bool"
+    expected_data: true
+
+  - name: bool_false
+    description: "Boolean false round-trips"
+    value:
+      type: "bool"
+      data: false
+    expected_type: "bool"
+    expected_data: false
+
+  - name: integer_positive
+    description: "Positive integer round-trips"
+    value:
+      type: "integer"
+      data: 42
+    expected_type: "integer"
+    expected_data: 42
+
+  - name: integer_negative
+    description: "Negative integer round-trips"
+    value:
+      type: "integer"
+      data: -1
+    expected_type: "integer"
+    expected_data: -1
+
+  - name: integer_i64_max
+    description: "i64::MAX round-trips"
+    value:
+      type: "integer"
+      data: 9223372036854775807
+    expected_type: "integer"
+    expected_data: 9223372036854775807
+
+  - name: integer_i64_min
+    description: "i64::MIN round-trips"
+    value:
+      type: "integer"
+      data: -9223372036854775808
+    expected_type: "integer"
+    expected_data: -9223372036854775808
+
+  - name: float_positive
+    description: "Positive float round-trips"
+    value:
+      type: "float"
+      data: 3.14159
+    expected_type: "float"
+    expected_data: 3.14159
+
+  - name: string_ascii
+    description: "ASCII string round-trips"
+    value:
+      type: "string"
+      data: "hello"
+    expected_type: "string"
+    expected_data: "hello"
+
+  - name: string_utf8
+    description: "UTF-8 string round-trips"
+    value:
+      type: "string"
+      data: "音量"
+    expected_type: "string"
+    expected_data: "音量"
+
+  - name: tuple_midi
+    description: "Tuple (channel, note, velocity) round-trips"
+    value:
+      type: "tuple"
+      data:
+        - type: "integer"
+          data: 0
+        - type: "integer"
+          data: 60
+        - type: "integer"
+          data: 100
+    expected_type: "tuple"
+    expected_length: 3
+
+  - name: list_notes
+    description: "List of notes round-trips"
+    value:
+      type: "list"
+      data:
+        - type: "integer"
+          data: 60
+        - type: "integer"
+          data: 62
+        - type: "integer"
+          data: 64
+        - type: "integer"
+          data: 67
+    expected_type: "list"
+    expected_length: 4
+
+  - name: map_note
+    description: "Map with note and velocity round-trips"
+    value:
+      type: "map"
+      data:
+        note:
+          type: "integer"
+          data: 60
+        velocity:
+          type: "integer"
+          data: 100
+    expected_type: "map"
+    expected_keys:
+      - "note"
+      - "velocity"
+
+  - name: typed_binary
+    description: "Typed binary with tag round-trips"
+    value:
+      type: "typed_binary"
+      tag: "ensemble/f32"
+      data: [0, 0, 128, 63]
+    expected_type: "typed_binary"
+    expected_tag: "ensemble/f32"

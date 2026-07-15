@@ -1,0 +1,87 @@
+# Protocol conformance fixtures — action message structure
+# These fixtures test the structure of action messages.
+
+suite: protocol
+name: action_structure
+
+cases:
+  - name: action_with_source
+    description: "Routed action includes source voice ID"
+    action:
+      type: "action"
+      payload:
+        source: 42
+        address: "/transport/bpm"
+        signal_type: "param"
+        timestamp: 10.5
+        payload:
+          type: "float"
+          data: 120.0
+    expected_fields:
+      - "source"
+      - "address"
+      - "signal_type"
+      - "timestamp"
+      - "payload"
+
+  - name: action_without_source
+    description: "Client action may omit source (hub assigns)"
+    action:
+      type: "action"
+      payload:
+        address: "/test"
+        signal_type: "event"
+        timestamp: 0.0
+        payload:
+          type: "null"
+    expected_fields:
+      - "address"
+      - "signal_type"
+      - "timestamp"
+      - "payload"
+    optional_fields:
+      - "source"
+
+  - name: signal_type_event
+    description: "Event signal type is fire-and-forget"
+    action:
+      type: "action"
+      payload:
+        address: "/trigger"
+        signal_type: "event"
+        timestamp: 0.0
+        payload:
+          type: "null"
+    expected_signal_type: "event"
+
+  - name: signal_type_param
+    description: "Param signal type is stateful key-value"
+    action:
+      type: "action"
+      payload:
+        address: "/level"
+        signal_type: "param"
+        timestamp: 0.0
+        payload:
+          type: "float"
+          data: 0.75
+    expected_signal_type: "param"
+
+  - name: signal_type_stream
+    description: "Stream signal type is high-rate best-effort"
+    action:
+      type: "action"
+      payload:
+        address: "/sensor/accel"
+        signal_type: "stream"
+        timestamp: 0.0
+        payload:
+          type: "list"
+          data:
+            - type: "float"
+              data: 0.1
+            - type: "float"
+              data: 0.2
+            - type: "float"
+              data: 0.3
+    expected_signal_type: "stream"

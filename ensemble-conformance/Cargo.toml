@@ -1,0 +1,21 @@
+[package]
+name = "ensemble-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Conformance test harness for the Ensemble protocol"
+
+[dependencies]
+ensemble-core = { path = "../ensemble-core" }
+ensemble-values = { path = "../ensemble-values" }
+ensemble-routing = { path = "../ensemble-routing" }
+ensemble-protocol = { path = "../ensemble-protocol" }
+ensemble-manifest = { path = "../ensemble-manifest" }
+ensemble-hub = { path = "../ensemble-hub" }
+ensemble-client = { path = "../ensemble-client" }
+ensemble-test-fixtures = { path = "../ensemble-test-fixtures" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+rmp-serde = "1"
+anyhow = "1"

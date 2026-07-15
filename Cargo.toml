@@ -8,7 +8,10 @@ members = [
     "ensemble-clock",
     "ensemble-hub",
     "ensemble-hub-tui",
-    "ensemble-client", "ensemble-bridge-midi",
+    "ensemble-client",
+    "ensemble-bridge-midi",
+    "ensemble-test-fixtures",
+    "ensemble-conformance",
 ]
 resolver = "2"
 

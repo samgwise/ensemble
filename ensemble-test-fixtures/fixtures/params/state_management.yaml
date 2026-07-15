@@ -1,0 +1,96 @@
+# Params conformance fixtures — state management
+# These fixtures test param state storage and replay behaviour.
+
+suite: params
+name: state_management
+
+cases:
+  - name: param_state_stored
+    description: "Param actions are stored by the hub"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/synth/cutoff"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 0.7
+      - action: "connect"
+        name: "joiner"
+      - action: "subscribe"
+        pattern: "/synth/*"
+      - expect: "param_replay"
+        address: "/synth/cutoff"
+        expected_value: 0.7
+
+  - name: param_state_overwritten
+    description: "New param value overwrites previous"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/level"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 0.5
+      - action: "send_action"
+        address: "/level"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 0.8
+      - action: "connect"
+        name: "joiner"
+      - action: "subscribe"
+        pattern: "/level"
+      - expect: "param_replay"
+        expected_value: 0.8
+
+  - name: unset_param_removes_state
+    description: "unset_param removes stored param state"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/temp"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 22.0
+      - action: "unset_param"
+        address: "/temp"
+      - action: "connect"
+        name: "joiner"
+      - action: "subscribe"
+        pattern: "/temp"
+      - expect: "no_param_replay"
+
+  - name: param_scoped_by_address
+    description: "Param state is scoped by address"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/track/1/volume"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 0.5
+      - action: "send_action"
+        address: "/track/2/volume"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 0.8
+      - action: "connect"
+        name: "joiner"
+      - action: "subscribe"
+        pattern: "/track/*/volume"
+      - expect: "param_replay"
+        address: "/track/1/volume"
+        expected_value: 0.5
+      - expect: "param_replay"
+        address: "/track/2/volume"
+        expected_value: 0.8

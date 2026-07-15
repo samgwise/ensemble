@@ -1,0 +1,108 @@
+# Routing conformance fixtures — pattern matching
+# These fixtures test the Ensemble routing specification v1.
+
+suite: routing
+name: pattern_matching
+
+cases:
+  - name: exact_match
+    description: "Exact segment match"
+    pattern: "/foo/bar"
+    address: "/foo/bar"
+    should_match: true
+    captures: {}
+
+  - name: exact_match_failure
+    description: "Exact match fails on different segment"
+    pattern: "/foo/bar"
+    address: "/foo/baz"
+    should_match: false
+    captures: {}
+
+  - name: exact_match_length_mismatch
+    description: "Exact match fails on different length"
+    pattern: "/foo/bar"
+    address: "/foo/bar/baz"
+    should_match: false
+    captures: {}
+
+  - name: wildcard_single_segment
+    description: "Single wildcard matches exactly one segment"
+    pattern: "/foo/*/bar"
+    address: "/foo/baz/bar"
+    should_match: true
+    captures: {}
+
+  - name: wildcard_does_not_match_multiple
+    description: "Single wildcard does not match multiple segments"
+    pattern: "/track/*/volume"
+    address: "/track/1/mixer/volume"
+    should_match: false
+    captures: {}
+
+  - name: wildcard_various_segments
+    description: "Wildcard matches various single segments"
+    pattern: "/track/*/volume"
+    address: "/track/17/volume"
+    should_match: true
+    captures: {}
+
+  - name: recursive_wildcard_deep
+    description: "Recursive wildcard matches deep paths"
+    pattern: "/foo/**"
+    address: "/foo/a/b/c"
+    should_match: true
+    captures: {}
+
+  - name: recursive_wildcard_zero_remaining
+    description: "Recursive wildcard matches zero remaining segments"
+    pattern: "/track/**"
+    address: "/track"
+    should_match: true
+    captures: {}
+
+  - name: recursive_wildcard_one_remaining
+    description: "Recursive wildcard matches one remaining segment"
+    pattern: "/track/**"
+    address: "/track/1"
+    should_match: true
+    captures: {}
+
+  - name: recursive_wildcard_different_prefix
+    description: "Recursive wildcard fails on different prefix"
+    pattern: "/track/**"
+    address: "/foo/track"
+    should_match: false
+    captures: {}
+
+  - name: named_capture_single
+    description: "Named capture extracts one segment"
+    pattern: "/track/{id}/volume"
+    address: "/track/17/volume"
+    should_match: true
+    captures:
+      id: "17"
+
+  - name: named_capture_multiple
+    description: "Multiple named captures"
+    pattern: "/device/{device}/control/{control}"
+    address: "/device/mixer/control/gain"
+    should_match: true
+    captures:
+      device: "mixer"
+      control: "gain"
+
+  - name: named_capture_unicode
+    description: "Named capture with unicode name"
+    pattern: "/track/{番号}/volume"
+    address: "/track/17/volume"
+    should_match: true
+    captures:
+      番号: "17"
+
+  - name: named_capture_no_match
+    description: "Named capture fails when exact segments don't match"
+    pattern: "/track/{id}/volume"
+    address: "/track/17/pan"
+    should_match: false
+    captures: {}

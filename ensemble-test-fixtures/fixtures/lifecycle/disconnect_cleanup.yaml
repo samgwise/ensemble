@@ -1,0 +1,71 @@
+# Lifecycle conformance fixtures — disconnect cleanup
+# These fixtures test that voice disconnection cleans up all associated state.
+
+suite: lifecycle
+name: disconnect_cleanup
+
+cases:
+  - name: graceful_disconnect
+    description: "Graceful disconnect cleans up param state"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/temp"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 22.5
+      - action: "disconnect"
+      - action: "connect"
+        name: "joiner"
+      - action: "subscribe"
+        pattern: "/temp"
+      - expect: "no_param_replay"
+
+  - name: ungraceful_disconnect
+    description: "Connection drop cleans up param state"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/pressure"
+        signal_type: "param"
+        payload:
+          type: "float"
+          data: 1.0
+      - action: "drop_connection"
+      - action: "connect"
+        name: "joiner"
+      - action: "subscribe"
+        pattern: "/pressure"
+      - expect: "no_param_replay"
+
+  - name: disconnect_removes_subscriptions
+    description: "Disconnect removes all subscription patterns"
+    steps:
+      - action: "connect"
+        name: "subscriber"
+      - action: "subscribe"
+        pattern: "/test/**"
+      - action: "disconnect"
+      - action: "connect"
+        name: "sender"
+      - action: "send_action"
+        address: "/test/foo"
+        signal_type: "event"
+        payload:
+          type: "null"
+      - expect: "no_routing"
+
+  - name: disconnect_removes_manifest
+    description: "Disconnect removes voice manifest"
+    steps:
+      - action: "connect"
+        name: "manifest-voice"
+      - action: "set_manifest"
+        manifest:
+          name: "Temporary"
+          description: "Will disconnect"
+      - action: "disconnect"
+      - expect: "manifest_removed"

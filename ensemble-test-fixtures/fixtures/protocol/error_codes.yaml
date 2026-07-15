@@ -1,0 +1,48 @@
+# Protocol conformance fixtures — error codes
+# These fixtures test that error codes are correctly defined and used.
+
+suite: protocol
+name: error_codes
+
+cases:
+  - name: unsupported_protocol_version
+    description: "Error code for unsupported protocol version"
+    error:
+      code: "unsupported_protocol_version"
+      message: "Hub supports protocol version 1, client requested 99"
+    expected_code: "unsupported_protocol_version"
+
+  - name: invalid_pattern
+    description: "Error code for invalid subscribe pattern"
+    error:
+      code: "invalid_pattern"
+      message: "Recursive wildcard must be final segment"
+    expected_code: "invalid_pattern"
+
+  - name: malformed_manifest
+    description: "Error code for malformed manifest"
+    error:
+      code: "malformed_manifest"
+      message: "set_manifest: manifest is not a valid manifest map"
+    expected_code: "malformed_manifest"
+
+  - name: invalid_message
+    description: "Error code for invalid message"
+    error:
+      code: "invalid_message"
+      message: "Message could not be parsed"
+    expected_code: "invalid_message"
+
+  - name: internal_error
+    description: "Error code for internal hub error"
+    error:
+      code: "internal_error"
+      message: "An internal error occurred"
+    expected_code: "internal_error"
+
+  - name: reserved_namespace
+    description: "Error code for reserved namespace violation"
+    error:
+      code: "reserved_namespace"
+      message: "Address '/hub/test' is in the reserved /hub/ namespace"
+    expected_code: "reserved_namespace"

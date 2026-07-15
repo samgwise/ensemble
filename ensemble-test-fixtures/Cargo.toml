@@ -1,0 +1,10 @@
+[package]
+name = "ensemble-test-fixtures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Language-neutral YAML fixtures for Ensemble protocol conformance testing"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"

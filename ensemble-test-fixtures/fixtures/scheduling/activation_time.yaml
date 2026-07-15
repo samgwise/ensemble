@@ -1,0 +1,89 @@
+# Scheduling conformance fixtures — activation time retention
+# These fixtures test that future params are not stored until activation.
+
+suite: scheduling
+name: activation_time
+
+cases:
+  - name: future_param_not_in_snapshot
+    description: "Future param is not included in late-joiner snapshot"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/level"
+        signal_type: "param"
+        timestamp: 0.0
+        payload:
+          type: "float"
+          data: 0.5
+      - action: "send_action"
+        address: "/level"
+        signal_type: "param"
+        timestamp_offset: 0.5
+        payload:
+          type: "float"
+          data: 0.8
+      - action: "connect"
+        name: "joiner"
+      - action: "subscribe"
+        pattern: "/level"
+      - expect: "param_replay"
+        expected_value: 0.5
+    description_detail: "Late joiner receives current value (0.5), not future (0.8)"
+
+  - name: future_param_activates
+    description: "Future param becomes current after activation time"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/level"
+        signal_type: "param"
+        timestamp: 0.0
+        payload:
+          type: "float"
+          data: 0.5
+      - action: "send_action"
+        address: "/level"
+        signal_type: "param"
+        timestamp_offset: 0.5
+        payload:
+          type: "float"
+          data: 0.8
+      - action: "wait_ms"
+        duration: 600
+      - action: "connect"
+        name: "joiner2"
+      - action: "subscribe"
+        pattern: "/level"
+      - expect: "param_replay"
+        expected_value: 0.8
+    description_detail: "After activation, late joiner receives activated value (0.8)"
+
+  - name: snapshot_consistency
+    description: "Snapshot only includes current params, not scheduled"
+    steps:
+      - action: "connect"
+        name: "setter"
+      - action: "send_action"
+        address: "/temp"
+        signal_type: "param"
+        timestamp: 0.0
+        payload:
+          type: "float"
+          data: 20.0
+      - action: "send_action"
+        address: "/temp"
+        signal_type: "param"
+        timestamp_offset: 1.0
+        payload:
+          type: "float"
+          data: 25.0
+      - action: "connect"
+        name: "subscriber"
+      - action: "subscribe"
+        pattern: "/temp"
+      - expect: "param_replay"
+        expected_value: 20.0
+      - expect: "no_additional_replay"

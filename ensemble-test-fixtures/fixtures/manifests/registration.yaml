@@ -1,0 +1,123 @@
+# Manifests conformance fixtures — registration
+# These fixtures test manifest set and patch behaviour.
+
+suite: manifests
+name: registration
+
+cases:
+  - name: set_manifest
+    description: "set_manifest replaces the entire manifest"
+    manifest:
+      name: "MIDI Bridge"
+      description: "Provides MIDI input and output"
+      version: "1.0.0"
+      tags:
+        - "midi"
+        - "bridge"
+      provides:
+        - "midi-input"
+        - "midi-output"
+      expects: []
+      routes: []
+    expected_result: "manifest_stored"
+
+  - name: minimal_manifest
+    description: "Manifest with only name is valid"
+    manifest:
+      name: "Simple Voice"
+    expected_result: "manifest_stored"
+    expected_defaults:
+      description: null
+      version: null
+      tags: []
+      provides: []
+      expects: []
+      routes: []
+
+  - name: set_manifest_replaces
+    description: "Second set_manifest replaces the first"
+    steps:
+      - action: "set_manifest"
+        manifest:
+          name: "Version 1"
+          version: "1.0.0"
+      - action: "set_manifest"
+        manifest:
+          name: "Version 2"
+          version: "2.0.0"
+    expected_result: "second_manifest_stored"
+
+  - name: patch_manifest
+    description: "patch_manifest updates only specified fields"
+    steps:
+      - action: "set_manifest"
+        manifest:
+          name: "Original"
+          description: "Original description"
+          version: "1.0.0"
+          tags:
+            - "tag1"
+      - action: "patch_manifest"
+        patch:
+          description: "Updated description"
+          tags:
+            - "tag2"
+            - "tag3"
+    expected_result: "fields_updated"
+    expected_fields:
+      name: "Original"
+      description: "Updated description"
+      version: "1.0.0"
+      tags:
+        - "tag2"
+        - "tag3"
+
+  - name: patch_without_prior_set
+    description: "patch_manifest without prior set creates default manifest"
+    steps:
+      - action: "patch_manifest"
+        patch:
+          name: "Patched Name"
+          description: "Patched description"
+    expected_result: "manifest_created_and_patched"
+
+  - name: patch_clears_with_null
+    description: "patch_manifest can clear optional fields with null"
+    steps:
+      - action: "set_manifest"
+        manifest:
+          name: "Test"
+          description: "Has description"
+          version: "1.0.0"
+      - action: "patch_manifest"
+        patch:
+          description: null
+          version: null
+    expected_result: "fields_cleared"
+    expected_fields:
+      name: "Test"
+      description: null
+      version: null
+
+  - name: manifest_does_not_affect_routing
+    description: "Manifests are advisory and do not affect routing"
+    steps:
+      - action: "connect"
+        name: "sender"
+      - action: "set_manifest"
+        manifest:
+          name: "Sender"
+          provides:
+            - "test-output"
+      - action: "connect"
+        name: "receiver"
+      - action: "subscribe"
+        pattern: "/test/**"
+      - action: "send_action"
+        address: "/test/foo"
+        signal_type: "event"
+        payload:
+          type: "integer"
+          data: 42
+      - expect: "action_received"
+        address: "/test/foo"

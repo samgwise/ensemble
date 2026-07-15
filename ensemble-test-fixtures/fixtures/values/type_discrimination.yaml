@@ -1,0 +1,81 @@
+# Values conformance fixtures — type discrimination
+# These fixtures test that different types remain distinct.
+
+suite: values
+name: type_discrimination
+
+cases:
+  - name: integer_vs_float
+    description: "Integer 42 and Float 42.0 are not equal"
+    value_a:
+      type: "integer"
+      data: 42
+    value_b:
+      type: "float"
+      data: 42.0
+    should_be_equal: false
+
+  - name: integer_vs_string
+    description: "Integer 42 and String '42' are not equal"
+    value_a:
+      type: "integer"
+      data: 42
+    value_b:
+      type: "string"
+      data: "42"
+    should_be_equal: false
+
+  - name: float_vs_string
+    description: "Float 42.0 and String '42' are not equal"
+    value_a:
+      type: "float"
+      data: 42.0
+    value_b:
+      type: "string"
+      data: "42"
+    should_be_equal: false
+
+  - name: null_vs_bool_false
+    description: "Null and Bool false are not equal"
+    value_a:
+      type: "null"
+    value_b:
+      type: "bool"
+      data: false
+    should_be_equal: false
+
+  - name: null_vs_integer_zero
+    description: "Null and Integer 0 are not equal"
+    value_a:
+      type: "null"
+    value_b:
+      type: "integer"
+      data: 0
+    should_be_equal: false
+
+  - name: null_vs_empty_string
+    description: "Null and empty String are not equal"
+    value_a:
+      type: "null"
+    value_b:
+      type: "string"
+      data: ""
+    should_be_equal: false
+
+  - name: tuple_vs_list
+    description: "Tuple and List with same contents are not equal"
+    value_a:
+      type: "tuple"
+      data:
+        - type: "integer"
+          data: 1
+        - type: "integer"
+          data: 2
+    value_b:
+      type: "list"
+      data:
+        - type: "integer"
+          data: 1
+        - type: "integer"
+          data: 2
+    should_be_equal: false

@@ -1,0 +1,33 @@
+# Routing conformance fixtures — reserved namespace enforcement
+# The /hub/ namespace is reserved for hub-generated events.
+# Voices must not send actions to /hub/** addresses.
+
+suite: routing
+name: namespace_enforcement
+
+cases:
+  - name: hub_namespace_rejected
+    description: "Actions to /hub/ namespace are rejected"
+    address: "/hub/test"
+    signal_type: "event"
+    should_reject: true
+    error_code: "reserved_namespace"
+
+  - name: hub_namespace_deep_rejected
+    description: "Actions to /hub/** are rejected"
+    address: "/hub/voice/joined"
+    signal_type: "event"
+    should_reject: true
+    error_code: "reserved_namespace"
+
+  - name: normal_namespace_accepted
+    description: "Actions to non-hub addresses are accepted"
+    address: "/synth/volume"
+    signal_type: "param"
+    should_reject: false
+
+  - name: similar_prefix_accepted
+    description: "Addresses starting with /hub but not /hub/ are accepted"
+    address: "/hubcap/setting"
+    signal_type: "event"
+    should_reject: false

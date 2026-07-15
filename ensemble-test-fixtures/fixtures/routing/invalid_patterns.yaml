@@ -1,0 +1,66 @@
+# Routing conformance fixtures — invalid pattern rejection
+# These fixtures test that invalid patterns are rejected at parse time.
+
+suite: routing
+name: invalid_patterns
+
+cases:
+  - name: recursive_wildcard_not_final
+    description: "** must be the final segment"
+    pattern: "/foo/**/bar"
+    should_reject: true
+    error_type: "recursive_wildcard_not_final"
+
+  - name: alternation_not_supported
+    description: "Alternation syntax is not supported"
+    pattern: "/{foo,bar}"
+    should_reject: true
+    error_type: "alternation_not_supported"
+
+  - name: typed_capture_not_supported
+    description: "Typed captures are not supported"
+    pattern: "/{id:int}"
+    should_reject: true
+    error_type: "typed_capture_not_supported"
+
+  - name: character_class_not_supported
+    description: "Character classes are not supported"
+    pattern: "/track/[0-9]+"
+    should_reject: true
+    error_type: "character_class_not_supported"
+
+  - name: recursive_capture_not_supported
+    description: "Recursive captures are not supported"
+    pattern: "/{path**}"
+    should_reject: true
+    error_type: "recursive_capture_not_supported"
+
+  - name: empty_capture_name
+    description: "Capture name must not be empty"
+    pattern: "/{}"
+    should_reject: true
+    error_type: "empty_capture_name"
+
+  - name: slash_in_capture_name
+    description: "Capture name must not contain /"
+    pattern: "/{foo/bar}"
+    should_reject: true
+    error_type: "invalid_capture_name"
+
+  - name: nested_braces
+    description: "Nested braces in capture name"
+    pattern: "/{foo{bar}}"
+    should_reject: true
+    error_type: "nested_braces"
+
+  - name: star_in_capture_name
+    description: "Capture name must not contain *"
+    pattern: "/{foo*bar}"
+    should_reject: true
+    error_type: "invalid_capture_name"
+
+  - name: pattern_must_start_with_slash
+    description: "Pattern must start with /"
+    pattern: "foo/bar"
+    should_reject: true
+    error_type: "invalid_address"

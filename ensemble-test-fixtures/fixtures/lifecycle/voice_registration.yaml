@@ -1,0 +1,46 @@
+# Lifecycle conformance fixtures — voice registration
+# These fixtures test voice connection and registration behaviour.
+
+suite: lifecycle
+name: voice_registration
+
+cases:
+  - name: hello_welcome_handshake
+    description: "Voice sends hello, hub responds with welcome"
+    steps:
+      - action: "connect"
+        name: "test-voice"
+      - expect: "welcome"
+        fields:
+          - "voice_id"
+
+  - name: duplicate_names_accepted
+    description: "Multiple voices with the same name are accepted"
+    steps:
+      - action: "connect"
+        name: "same-name"
+      - expect: "welcome"
+      - action: "connect"
+        name: "same-name"
+      - expect: "welcome"
+    expected_result: "both_voices_connected"
+
+  - name: voice_id_assignment
+    description: "Hub assigns unique voice IDs"
+    steps:
+      - action: "connect"
+        name: "voice-1"
+      - expect: "welcome"
+      - action: "connect"
+        name: "voice-2"
+      - expect: "welcome"
+    expected_result: "distinct_voice_ids"
+
+  - name: protocol_version_check
+    description: "Hub rejects unsupported protocol versions"
+    steps:
+      - action: "connect_with_version"
+        name: "bad-version"
+        protocol_version: 99
+      - expect: "error"
+        error_code: "unsupported_protocol_version"
