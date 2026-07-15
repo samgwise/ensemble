@@ -72,7 +72,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 5. Manifest — commit: 4ced5b3
 - [x] 6. Scheduling — commit: 12c7b7f
 - [x] 7. Observability and hub events — commit: 4aa6720
-- [ ] 8. Hub / TUI split — commit: _
+- [x] 8. Hub / TUI split — commit: 6b372b5
 - [ ] 9. Conformance harness — commit: _
 
 6. Increments
@@ -179,9 +179,9 @@ Test-first plan:
 Acceptance criteria:
 - `ensemble-hub` builds and runs headless with no TUI dependency.
 - `ensemble-hub-tui` renders the PRD views and route tester.
-Status: Not started. Depends on 6.4, 6.5, 6.6, 6.7.
+Status: Complete.
 
-6.9 Conformance harness
+### 6.9 Conformance harness
 Goal: stand up the conformance runner and fixture corpus as a first-class deliverable.
 Crate: create `ensemble-test-fixtures` and `ensemble-conformance`.
 Spec reference: `design/conformance-testing.md`; PRD §15.

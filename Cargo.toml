@@ -7,6 +7,7 @@ members = [
     "ensemble-manifest",
     "ensemble-clock",
     "ensemble-hub",
+    "ensemble-hub-tui",
     "ensemble-client", "ensemble-bridge-midi",
 ]
 resolver = "2"

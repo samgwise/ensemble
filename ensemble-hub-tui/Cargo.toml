@@ -1,11 +1,14 @@
 [package]
-name = "ensemble-hub"
+name = "ensemble-hub-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ensemble-hub = { path = "../ensemble-hub" }
 ensemble-core = { path = "../ensemble-core" }
 ensemble-routing = { path = "../ensemble-routing" }
 tokio = { version = "1", features = ["full"] }
+ratatui = "0.29"
+crossterm = "0.28"
 anyhow = "1"
