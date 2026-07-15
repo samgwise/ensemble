@@ -170,6 +170,7 @@ pub const ERR_INVALID_PATTERN: &str = "invalid_pattern";
 pub const ERR_MALFORMED_MANIFEST: &str = "malformed_manifest";
 pub const ERR_INVALID_MESSAGE: &str = "invalid_message";
 pub const ERR_INTERNAL_ERROR: &str = "internal_error";
+pub const ERR_RESERVED_NAMESPACE: &str = "reserved_namespace";
 
 // ---------------------------------------------------------------------------
 // Helper functions

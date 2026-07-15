@@ -18,7 +18,7 @@ pub use ensemble_protocol::{
     MSG_SET_MANIFEST, MSG_PATCH_MANIFEST, MSG_UPDATE_NAME,
     // Error codes
     ERR_UNSUPPORTED_PROTOCOL_VERSION, ERR_INVALID_PATTERN, ERR_MALFORMED_MANIFEST,
-    ERR_INVALID_MESSAGE, ERR_INTERNAL_ERROR,
+    ERR_INVALID_MESSAGE, ERR_INTERNAL_ERROR, ERR_RESERVED_NAMESPACE,
     // Payload structures
     SignalType, HelloPayload, WelcomePayload, SubscribePayload, UnsubscribePayload,
     ActionPayload, UnsetParamPayload, ClockPingPayload, ClockPongPayload,

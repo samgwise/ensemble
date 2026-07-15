@@ -92,9 +92,10 @@ impl HubState {
     }
 
     /// Remove a voice and all its associated state (subscriptions, params, manifest).
-    fn remove_voice(&mut self, voice_id: VoiceId, reason: &str) {
+    /// Returns the voice name if the voice existed, for hub event emission.
+    fn remove_voice(&mut self, voice_id: VoiceId, reason: &str) -> Option<String> {
         self.log(format!("Voice {voice_id} disconnected ({reason})"));
-        self.voices.remove(&voice_id);
+        let voice_name = self.voices.remove(&voice_id).map(|v| v.name);
         // Remove param state owned by this voice.
         self.param_state.retain(|_, (source, _)| *source != voice_id);
         // Remove scheduled actions from this voice.
@@ -105,6 +106,7 @@ impl HubState {
         self.schedule.retain(|_, actions| !actions.is_empty());
         // Remove manifest for this voice.
         self.manifests.remove(&voice_id);
+        voice_name
     }
 }
 
@@ -214,6 +216,15 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
             return;
         }
 
+        // Emit hub event: voice joined.
+        let joined_payload = Value::Map({
+            let mut m = BTreeMap::new();
+            m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+            m.insert("name".into(), Value::String(voice_name.clone()));
+            m
+        });
+        emit_hub_event(&st, "/hub/voice/joined", joined_payload).await;
+
         // Replay current param state to the new voice (no subscriptions yet,
         // so this will be empty until the voice subscribes — but we keep the
         // logic for when subscriptions are added post-welcome).
@@ -262,6 +273,16 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                             .unwrap_or(SignalType::Event);
                         let timestamp = get_float(&map, "timestamp").unwrap_or(0.0);
                         let payload = get_value(&map, "payload").unwrap_or(Value::Null);
+
+                        // Reserved namespace enforcement: reject actions to /hub/**.
+                        if address.starts_with("/hub/") {
+                            let err_msg = error(
+                                ERR_RESERVED_NAMESPACE,
+                                format!("Address '{address}' is in the reserved /hub/ namespace"),
+                            );
+                            let _ = tx.send(err_msg).await;
+                            continue;
+                        }
 
                         // Create action with source set for routing.
                         let routed_msg = action_with_source(
@@ -381,7 +402,16 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 
                     MSG_DISCONNECT => {
                         let mut st = state.lock().await;
-                        st.remove_voice(voice_id, "disconnect");
+                        if let Some(name) = st.remove_voice(voice_id, "disconnect") {
+                            // Emit hub event: voice left.
+                            let left_payload = Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("name".into(), Value::String(name));
+                                m
+                            });
+                            emit_hub_event(&st, "/hub/voice/left", left_payload).await;
+                        }
                         break;
                     }
 
@@ -389,17 +419,26 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                         let map = payload_map(&msg);
                         let new_name = get_string(&map, "name").unwrap_or_default();
                         let mut st = state.lock().await;
-                        let log_msg = if let Some(voice) = st.voices.get_mut(&voice_id) {
-                            let old_name = voice.name.clone();
+                        let old_name = if let Some(voice) = st.voices.get_mut(&voice_id) {
+                            let old = voice.name.clone();
                             voice.name = new_name.clone();
-                            Some(format!(
-                                "Voice {voice_id} renamed: \"{old_name}\" -> \"{new_name}\""
-                            ))
+                            Some(old)
                         } else {
                             None
                         };
-                        if let Some(msg) = log_msg {
-                            st.log(msg);
+                        if let Some(old) = old_name {
+                            st.log(format!(
+                                "Voice {voice_id} renamed: \"{old}\" -> \"{new_name}\""
+                            ));
+                            // Emit hub event: voice renamed.
+                            let renamed_payload = Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("old_name".into(), Value::String(old));
+                                m.insert("new_name".into(), Value::String(new_name));
+                                m
+                            });
+                            emit_hub_event(&st, "/hub/voice/renamed", renamed_payload).await;
                         }
                     }
 
@@ -414,6 +453,14 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                                     manifest.name
                                 ));
                                 st.manifests.insert(voice_id, manifest);
+                                // Emit hub event: manifest set.
+                                let set_payload = Value::Map({
+                                    let mut m = BTreeMap::new();
+                                    m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                    m.insert("manifest".into(), manifest_value.clone());
+                                    m
+                                });
+                                emit_hub_event(&st, "/hub/manifest/set", set_payload).await;
                             }
                             None => {
                                 let err_msg = error(
@@ -434,8 +481,8 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                         let map = payload_map(&msg);
                         let patch_value = get_value(&map, "patch").unwrap_or(Value::Null);
                         let mut st = state.lock().await;
-                        let patch_map = match patch_value {
-                            Value::Map(m) => m,
+                        let patch_map = match &patch_value {
+                            Value::Map(m) => m.clone(),
                             _ => {
                                 let err_msg = error(
                                     ERR_MALFORMED_MANIFEST,
@@ -462,6 +509,14 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                         st.log(format!(
                             "Voice {voice_id}: manifest patched (\"{name}\")"
                         ));
+                        // Emit hub event: manifest updated.
+                        let updated_payload = Value::Map({
+                            let mut m = BTreeMap::new();
+                            m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                            m.insert("patch".into(), patch_value);
+                            m
+                        });
+                        emit_hub_event(&st, "/hub/manifest/updated", updated_payload).await;
                     }
 
                     other => {
@@ -473,19 +528,52 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 
             Err(CodecError::ConnectionClosed) => {
                 let mut st = state.lock().await;
-                st.remove_voice(voice_id, "connection closed");
+                if let Some(name) = st.remove_voice(voice_id, "connection closed") {
+                    // Emit hub event: voice left.
+                    let left_payload = Value::Map({
+                        let mut m = BTreeMap::new();
+                        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                        m.insert("name".into(), Value::String(name));
+                        m
+                    });
+                    emit_hub_event(&st, "/hub/voice/left", left_payload).await;
+                }
                 break;
             }
 
             Err(e) => {
                 let mut st = state.lock().await;
-                st.remove_voice(voice_id, &format!("read error: {e}"));
+                if let Some(name) = st.remove_voice(voice_id, &format!("read error: {e}")) {
+                    // Emit hub event: voice left.
+                    let left_payload = Value::Map({
+                        let mut m = BTreeMap::new();
+                        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                        m.insert("name".into(), Value::String(name));
+                        m
+                    });
+                    emit_hub_event(&st, "/hub/voice/left", left_payload).await;
+                }
                 break;
             }
         }
     }
 
     writer_handle.abort();
+}
+
+/// Emit a hub event as an ordinary action with source=0 (hub).
+/// Hub events are routed to all subscribers of /hub/** addresses.
+/// They do not alter protocol state.
+async fn emit_hub_event(st: &HubState, address: &str, payload: Value) {
+    let now = st.now();
+    let msg = action_with_source(0, address, SignalType::Event, now, payload);
+    // Route to all subscribers of /hub/** (source=0 means no exclusion).
+    for voice in st.voices.values() {
+        if matches_any(&voice.subscription_patterns, address) {
+            // Hub events are guaranteed delivery (not streams).
+            let _ = voice.tx.send(msg.clone()).await;
+        }
+    }
 }
 
 /// Route an action to all subscribed voices (except the sender).

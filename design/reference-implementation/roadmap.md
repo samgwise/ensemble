@@ -71,7 +71,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 4. Lifecycle — commit: 8c6dce0
 - [x] 5. Manifest — commit: 4ced5b3
 - [x] 6. Scheduling — commit: 12c7b7f
-- [ ] 7. Observability and hub events — commit: _
+- [x] 7. Observability and hub events — commit: e640ebf
 - [ ] 8. Hub / TUI split — commit: _
 - [ ] 9. Conformance harness — commit: _
 
@@ -166,8 +166,8 @@ Test-first plan:
 - Implement the hub event producer and reserved-namespace enforcement.
 Acceptance criteria:
 - Reserved `/hub/**` namespace is enforced (applications should not publish to it).
-- Hub events are ordinary actions in the observability plane and do not alter protocol state.
-Status: Not started. Depends on 6.3, 6.5.
+- Hub events are ordinary Actions in the observability plane and do not alter protocol state.
+Status: Complete.
 
 6.8 Hub / TUI split
 Goal: separate the hub runtime from the TUI per the PRD crate structure, and build out the TUI views.

@@ -81,8 +81,9 @@ impl TestHub {
     }
 
     /// Remove a voice and all its associated state (subscriptions, params, manifest).
-    fn remove_voice(&mut self, voice_id: VoiceId) {
-        self.voices.remove(&voice_id);
+    /// Returns the voice name if the voice existed, for hub event emission.
+    fn remove_voice(&mut self, voice_id: VoiceId) -> Option<String> {
+        let voice_name = self.voices.remove(&voice_id).map(|v| v.name);
         // Remove param state owned by this voice.
         self.param_state.retain(|_, (source, _)| *source != voice_id);
         // Remove scheduled actions from this voice.
@@ -92,6 +93,7 @@ impl TestHub {
         self.schedule.retain(|_, actions| !actions.is_empty());
         // Remove manifest for this voice.
         self.manifests.remove(&voice_id);
+        voice_name
     }
 }
 
@@ -121,6 +123,21 @@ async fn route_action(h: &TestHub, source: VoiceId, address: &str, msg: &WireMes
 }
 
 type SharedHub = Arc<Mutex<TestHub>>;
+
+/// Emit a hub event as an ordinary action with source=0 (hub).
+/// Hub events are routed to all subscribers of /hub/** addresses.
+/// They do not alter protocol state.
+async fn emit_hub_event(h: &TestHub, address: &str, payload: Value) {
+    let now = h.now();
+    let msg = action_with_source(0, address, SignalType::Event, now, payload);
+    // Route to all subscribers of /hub/** (source=0 means no exclusion).
+    for voice in h.voices.values() {
+        if matches_any(&voice.subscription_patterns, address) {
+            // Hub events are guaranteed delivery (not streams).
+            let _ = voice.tx.send(msg.clone()).await;
+        }
+    }
+}
 
 async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
     let (reader, writer) = stream.into_split();
@@ -156,6 +173,15 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
 
         let welcome_msg = welcome(voice_id);
         let _ = codec::write_message(&mut writer, &welcome_msg).await;
+
+        // Emit hub event: voice joined.
+        let joined_payload = Value::Map({
+            let mut m = BTreeMap::new();
+            m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+            m.insert("name".into(), Value::String(voice_name.clone()));
+            m
+        });
+        emit_hub_event(&h, "/hub/voice/joined", joined_payload).await;
 
         // Replay param state to the new voice (no subscriptions yet).
         let patterns: Vec<Pattern> = h
@@ -202,6 +228,16 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                             .unwrap_or(SignalType::Event);
                         let timestamp = get_float(&map, "timestamp").unwrap_or(0.0);
                         let payload = get_value(&map, "payload").unwrap_or(Value::Null);
+
+                        // Reserved namespace enforcement: reject actions to /hub/**.
+                        if address.starts_with("/hub/") {
+                            let err_msg = error(
+                                ERR_RESERVED_NAMESPACE,
+                                format!("Address '{address}' is in the reserved /hub/ namespace"),
+                            );
+                            let _ = tx.send(err_msg).await;
+                            continue;
+                        }
 
                         let routed_msg = action_with_source(
                             voice_id,
@@ -281,7 +317,16 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                     }
                     MSG_DISCONNECT => {
                         let mut h = hub.lock().await;
-                        h.remove_voice(voice_id);
+                        if let Some(name) = h.remove_voice(voice_id) {
+                            // Emit hub event: voice left.
+                            let left_payload = Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("name".into(), Value::String(name));
+                                m
+                            });
+                            emit_hub_event(&h, "/hub/voice/left", left_payload).await;
+                        }
                         break;
                     }
                     MSG_SET_MANIFEST => {
@@ -290,28 +335,76 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                         let mut h = hub.lock().await;
                         if let Some(manifest) = VoiceManifest::from_value(&manifest_value) {
                             h.manifests.insert(voice_id, manifest);
+                            // Emit hub event: manifest set.
+                            let set_payload = Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("manifest".into(), manifest_value.clone());
+                                m
+                            });
+                            emit_hub_event(&h, "/hub/manifest/set", set_payload).await;
                         }
                     }
                     MSG_PATCH_MANIFEST => {
                         let map = payload_map(&msg);
                         let patch_value = get_value(&map, "patch").unwrap_or(Value::Null);
                         let mut h = hub.lock().await;
-                        if let Value::Map(patch_map) = patch_value {
+                        if let Value::Map(patch_map) = &patch_value {
                             let manifest = h
                                 .manifests
                                 .entry(voice_id)
                                 .or_insert_with(VoiceManifest::default);
-                            manifest.apply_patch(&patch_map);
+                            manifest.apply_patch(patch_map);
+                            // Emit hub event: manifest updated.
+                            let updated_payload = Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("patch".into(), patch_value);
+                                m
+                            });
+                            emit_hub_event(&h, "/hub/manifest/updated", updated_payload).await;
+                        }
+                    }
+                    MSG_UPDATE_NAME => {
+                        let map = payload_map(&msg);
+                        let new_name = get_string(&map, "name").unwrap_or_default();
+                        let mut h = hub.lock().await;
+                        let old_name = if let Some(voice) = h.voices.get_mut(&voice_id) {
+                            let old = voice.name.clone();
+                            voice.name = new_name.clone();
+                            Some(old)
+                        } else {
+                            None
+                        };
+                        if let Some(old) = old_name {
+                            // Emit hub event: voice renamed.
+                            let renamed_payload = Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("old_name".into(), Value::String(old));
+                                m.insert("new_name".into(), Value::String(new_name));
+                                m
+                            });
+                            emit_hub_event(&h, "/hub/voice/renamed", renamed_payload).await;
                         }
                     }
                     _ => {
-                        // Ignore unknown message types (e.g. update_name).
+                        // Ignore unknown message types.
                     }
                 }
             }
             Err(_) => {
                 let mut h = hub.lock().await;
-                h.remove_voice(voice_id);
+                if let Some(name) = h.remove_voice(voice_id) {
+                    // Emit hub event: voice left.
+                    let left_payload = Value::Map({
+                        let mut m = BTreeMap::new();
+                        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                        m.insert("name".into(), Value::String(name));
+                        m
+                    });
+                    emit_hub_event(&h, "/hub/voice/left", left_payload).await;
+                }
                 break;
             }
         }
@@ -1644,4 +1737,372 @@ async fn snapshot_consistency() {
 
     setter.disconnect().await;
     subscriber.disconnect().await;
+}
+
+// ---------------------------------------------------------------------------
+// Observability and Hub Events conformance tests (Increment 7)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reserved_namespace_rejected() {
+    let port = start_test_hub().await;
+
+    let sender = Hub::connect(port, "sender")
+        .await
+        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+
+    receiver.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Try to send an action to the reserved /hub/ namespace.
+    sender
+        .send_action(action(
+            "/hub/test",
+            SignalType::Event,
+            0.0,
+            Value::Integer(99),
+        ))
+        .await
+        .unwrap();
+
+    // The action should NOT be routed to the receiver (reserved namespace).
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        receiver.recv_action(),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "Actions to /hub/ namespace should be rejected and not routed"
+    );
+
+    // The connection should still be alive — send a normal action.
+    receiver.subscribe("/normal").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    sender
+        .send_action(action(
+            "/normal",
+            SignalType::Event,
+            0.0,
+            Value::Integer(1),
+        ))
+        .await
+        .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out — connection should still be alive after reserved namespace rejection")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_string(&map, "address").unwrap_or_default(), "/normal");
+
+    sender.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn hub_event_voice_joined() {
+    let port = start_test_hub().await;
+
+    // Subscribe to hub events before connecting the new voice.
+    let mut observer = Hub::connect(port, "observer")
+        .await
+        .unwrap();
+    observer.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connect a new voice — should trigger /hub/voice/joined.
+    let new_voice = Hub::connect(port, "new-voice")
+        .await
+        .unwrap();
+
+    // Observer should receive the joined event.
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        observer.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for voice joined event")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+    let source = get_integer(&map, "source").unwrap_or(0);
+    let payload_value = get_value(&map, "payload");
+    let name = payload_value.as_ref().and_then(|v| {
+        if let Value::Map(m) = v {
+            get_string(m, "name")
+        } else {
+            None
+        }
+    });
+
+    assert_eq!(address, "/hub/voice/joined");
+    assert_eq!(source, 0); // Hub events have source=0.
+    assert_eq!(name, Some("new-voice".into()));
+
+    observer.disconnect().await;
+    new_voice.disconnect().await;
+}
+
+#[tokio::test]
+async fn hub_event_voice_left() {
+    let port = start_test_hub().await;
+
+    let mut observer = Hub::connect(port, "observer")
+        .await
+        .unwrap();
+    observer.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connect and disconnect a voice.
+    {
+        let voice = Hub::connect(port, "leaving-voice")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Drain the joined event.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            observer.recv_action(),
+        )
+        .await;
+
+        voice.disconnect().await;
+    }
+
+    // Wait for the disconnect to be processed.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Observer should receive the left event.
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        observer.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for voice left event")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+    let source = get_integer(&map, "source").unwrap_or(0);
+
+    assert_eq!(address, "/hub/voice/left");
+    assert_eq!(source, 0);
+
+    observer.disconnect().await;
+}
+
+#[tokio::test]
+async fn hub_event_voice_renamed() {
+    let port = start_test_hub().await;
+
+    let mut observer = Hub::connect(port, "observer")
+        .await
+        .unwrap();
+    observer.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let voice = Hub::connect(port, "original-name")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Drain the joined event.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        observer.recv_action(),
+    )
+    .await;
+
+    // Rename the voice.
+    voice.send_update_name("new-name").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Observer should receive the renamed event.
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        observer.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for voice renamed event")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+    let source = get_integer(&map, "source").unwrap_or(0);
+
+    assert_eq!(address, "/hub/voice/renamed");
+    assert_eq!(source, 0);
+
+    observer.disconnect().await;
+    voice.disconnect().await;
+}
+
+#[tokio::test]
+async fn hub_event_manifest_set() {
+    let port = start_test_hub().await;
+
+    let mut observer = Hub::connect(port, "observer")
+        .await
+        .unwrap();
+    observer.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let voice = Hub::connect(port, "manifest-voice")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Drain the joined event.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        observer.recv_action(),
+    )
+    .await;
+
+    // Set a manifest.
+    let manifest = VoiceManifest {
+        name: "Test Manifest".into(),
+        description: Some("A test manifest.".into()),
+        version: Some("1.0.0".into()),
+        tags: vec!["test".into()],
+        provides: vec![],
+        expects: vec![],
+        routes: vec![],
+    };
+    voice.set_manifest(&manifest).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Observer should receive the manifest set event.
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        observer.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for manifest set event")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+    let source = get_integer(&map, "source").unwrap_or(0);
+
+    assert_eq!(address, "/hub/manifest/set");
+    assert_eq!(source, 0);
+
+    observer.disconnect().await;
+    voice.disconnect().await;
+}
+
+#[tokio::test]
+async fn hub_event_manifest_updated() {
+    let port = start_test_hub().await;
+
+    let mut observer = Hub::connect(port, "observer")
+        .await
+        .unwrap();
+    observer.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let voice = Hub::connect(port, "patch-voice")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Drain the joined event.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        observer.recv_action(),
+    )
+    .await;
+
+    // Patch a manifest.
+    let mut patch = BTreeMap::new();
+    patch.insert("name".into(), Value::String("Patched Name".into()));
+    voice.patch_manifest(Value::Map(patch)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Observer should receive the manifest updated event.
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        observer.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for manifest updated event")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+    let source = get_integer(&map, "source").unwrap_or(0);
+
+    assert_eq!(address, "/hub/manifest/updated");
+    assert_eq!(source, 0);
+
+    observer.disconnect().await;
+    voice.disconnect().await;
+}
+
+#[tokio::test]
+async fn hub_events_do_not_affect_protocol_state() {
+    let port = start_test_hub().await;
+
+    // Hub events are ordinary actions and should not affect protocol state.
+    // Verify that subscribing to /hub/** does not cause hub events to be
+    // treated as params or affect routing.
+    let mut observer = Hub::connect(port, "observer")
+        .await
+        .unwrap();
+    observer.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Connect a voice — triggers hub event.
+    let voice = Hub::connect(port, "test-voice")
+        .await
+        .unwrap();
+
+    // Receive the hub event.
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        observer.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for hub event")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let signal_type = get_string(&map, "signal_type").unwrap_or_default();
+
+    // Hub events are Event type, not Param.
+    assert_eq!(signal_type, "event");
+
+    // A late joiner subscribing to /hub/** should NOT receive the hub event
+    // as a param replay (hub events are not stored as param state).
+    let mut joiner = Hub::connect(port, "joiner")
+        .await
+        .unwrap();
+    joiner.subscribe("/hub/**").await.unwrap();
+
+    // Should NOT receive any param replay of hub events.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        joiner.recv_action(),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "Hub events should not be stored as param state and replayed to late joiners"
+    );
+
+    observer.disconnect().await;
+    voice.disconnect().await;
+    joiner.disconnect().await;
 }
