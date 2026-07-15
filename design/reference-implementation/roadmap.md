@@ -65,7 +65,7 @@ TUI — currently bundled into `ensemble-hub` and minimal. Spec separates `ensem
 
 Update this section as work proceeds. Mark each increment `[x]` when its acceptance criteria are met and all tests pass. Use `[~]` for in progress and `[ ]` for not started. Record the merge/commit reference on the line when complete.
 
-- [ ] 1. Routing — commit: _
+- [x] 1. Routing — commit: f458a86
 - [ ] 2. Value model — commit: _
 - [ ] 3. Protocol messages — commit: _
 - [ ] 4. Lifecycle — commit: _
@@ -89,7 +89,7 @@ Acceptance criteria:
 - `cargo test -p ensemble-routing` passes the full routing conformance corpus.
 - Invalid patterns are rejected with a structured error usable by the hub's `error` message.
 - Hub routing behaves per spec for `*`, `**`, and `{name}`.
-Status: Not started.
+Status: Complete.
 
 6.2 Value model
 Goal: bring `Value` to `design/value-model-specification.md`.
