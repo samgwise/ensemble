@@ -353,10 +353,12 @@ Useful for:
 
 ## PatchManifest
 
-Applies partial updates.
+Applies partial updates to the current manifest.
 
 ```rust
-PatchManifest { ... }
+PatchManifest {
+    patch: Map<String, Value>
+}
 ```
 
 Useful for:
@@ -364,6 +366,45 @@ Useful for:
 * adding routes
 * removing routes
 * updating metadata
+
+### Patch Semantics
+
+The patch is a map containing only the fields to update. Fields absent from the patch are left unchanged.
+
+**Scalar fields** (`name`, `description`, `version`):
+- If present in the patch, the field is replaced with the patch value
+- If the patch value is `null`, the field is cleared (set to `None`)
+- If absent from the patch, the field is unchanged
+
+**List fields** (`tags`, `provides`, `expects`, `routes`):
+- If present in the patch, the entire list is replaced (not merged)
+- To add items, include the complete new list in the patch
+- To remove items, include the list without those items
+- If absent from the patch, the list is unchanged
+
+**Example**: To update only the description and add a new route:
+
+```json
+{
+  "description": "Updated description",
+  "routes": [
+    { "address": "/existing/route", "signal": "event" },
+    { "address": "/new/route", "signal": "param" }
+  ]
+}
+```
+
+This leaves `name`, `version`, `tags`, `provides`, and `expects` unchanged.
+
+**Example**: To clear the version field:
+
+```json
+{
+  "version": null
+}
+```
+
+If no manifest has been set for a voice, `patch_manifest` creates a default manifest (all fields empty/none) and applies the patch to it.
 
 ***
 
