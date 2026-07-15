@@ -35,6 +35,8 @@ struct ScheduledAction {
     message: WireMessage,
     /// Parsed action fields for routing decisions.
     address: String,
+    /// Signal type for routing decisions (param state activation).
+    signal_type: SignalType,
 }
 
 /// Shared hub state, protected by a mutex.
@@ -271,17 +273,12 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                         );
 
                         let mut st = state.lock().await;
-
-                        // Store param state for late-joiner replay.
-                        if signal_type == SignalType::Param {
-                            st.param_state.insert(
-                                address.clone(),
-                                (voice_id, routed_msg.clone()),
-                            );
-                        }
+                        let now = st.now();
 
                         // If the action has a future timestamp, schedule it.
-                        if timestamp > 0.0 && timestamp > st.now() {
+                        if timestamp > 0.0 && timestamp > now {
+                            // For future params, do NOT write to param_state yet.
+                            // Activation-time retention: param becomes current only at its timestamp.
                             let key = timestamp_key(timestamp);
                             st.schedule
                                 .entry(key)
@@ -290,8 +287,16 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                                     source: voice_id,
                                     message: routed_msg,
                                     address,
+                                    signal_type,
                                 });
                         } else {
+                            // Immediate dispatch: store param state now.
+                            if signal_type == SignalType::Param {
+                                st.param_state.insert(
+                                    address.clone(),
+                                    (voice_id, routed_msg.clone()),
+                                );
+                            }
                             // Route immediately.
                             route_action(&st, voice_id, &address, &routed_msg).await;
                         }
@@ -484,18 +489,34 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 }
 
 /// Route an action to all subscribed voices (except the sender).
+/// Streams are dropped if the channel is full (best-effort delivery).
+/// Events and params wait for channel capacity (guaranteed delivery).
 async fn route_action(
     st: &HubState,
     source: VoiceId,
     address: &str,
     msg: &WireMessage,
 ) {
+    // Extract signal type from the message for congestion handling.
+    let signal_type = match &msg.payload {
+        Value::Map(m) => get_string(m, "signal_type")
+            .and_then(|s| parse_signal_type(&s))
+            .unwrap_or(SignalType::Event),
+        _ => SignalType::Event,
+    };
+
     for voice in st.voices.values() {
         if voice.id == source {
             continue;
         }
         if matches_any(&voice.subscription_patterns, address) {
-            let _ = voice.tx.send(msg.clone()).await;
+            if signal_type == SignalType::Stream {
+                // Streams are best-effort: drop if channel is full.
+                let _ = voice.tx.try_send(msg.clone());
+            } else {
+                // Events and params are guaranteed: wait for capacity.
+                let _ = voice.tx.send(msg.clone()).await;
+            }
         }
     }
 }
@@ -519,6 +540,13 @@ async fn run_scheduler(state: SharedState) {
             for key in due_keys {
                 if let Some(actions) = st.schedule.remove(&key) {
                     for scheduled in actions {
+                        // Activation-time retention: activate param state now.
+                        if scheduled.signal_type == SignalType::Param {
+                            st.param_state.insert(
+                                scheduled.address.clone(),
+                                (scheduled.source, scheduled.message.clone()),
+                            );
+                        }
                         route_action(&st, scheduled.source, &scheduled.address, &scheduled.message).await;
                     }
                 }

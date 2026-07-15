@@ -48,6 +48,7 @@ struct ScheduledAction {
     source: VoiceId,
     message: WireMessage,
     address: String,
+    signal_type: SignalType,
 }
 
 fn timestamp_key(t: f64) -> u64 {
@@ -94,10 +95,27 @@ impl TestHub {
     }
 }
 
+/// Route an action to all subscribed voices (except the sender).
+/// Streams are dropped if the channel is full (best-effort delivery).
+/// Events and params wait for channel capacity (guaranteed delivery).
 async fn route_action(h: &TestHub, source: VoiceId, address: &str, msg: &WireMessage) {
+    // Extract signal type from the message for congestion handling.
+    let signal_type = match &msg.payload {
+        Value::Map(m) => get_string(m, "signal_type")
+            .and_then(|s| parse_signal_type(&s))
+            .unwrap_or(SignalType::Event),
+        _ => SignalType::Event,
+    };
+
     for voice in h.voices.values() {
         if voice.id != source && matches_any(&voice.subscription_patterns, address) {
-            let _ = voice.tx.send(msg.clone()).await;
+            if signal_type == SignalType::Stream {
+                // Streams are best-effort: drop if channel is full.
+                let _ = voice.tx.try_send(msg.clone());
+            } else {
+                // Events and params are guaranteed: wait for capacity.
+                let _ = voice.tx.send(msg.clone()).await;
+            }
         }
     }
 }
@@ -194,17 +212,12 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                         );
 
                         let mut h = hub.lock().await;
-
-                        // Store param state.
-                        if signal_type == SignalType::Param {
-                            h.param_state.insert(
-                                address.clone(),
-                                (voice_id, routed_msg.clone()),
-                            );
-                        }
+                        let now = h.now();
 
                         // Schedule or route immediately.
-                        if timestamp > 0.0 && timestamp > h.now() {
+                        if timestamp > 0.0 && timestamp > now {
+                            // For future params, do NOT write to param_state yet.
+                            // Activation-time retention: param becomes current only at its timestamp.
                             let key = timestamp_key(timestamp);
                             h.schedule
                                 .entry(key)
@@ -213,8 +226,16 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                                     source: voice_id,
                                     message: routed_msg,
                                     address,
+                                    signal_type,
                                 });
                         } else {
+                            // Immediate dispatch: store param state now.
+                            if signal_type == SignalType::Param {
+                                h.param_state.insert(
+                                    address.clone(),
+                                    (voice_id, routed_msg.clone()),
+                                );
+                            }
                             route_action(&h, voice_id, &address, &routed_msg).await;
                         }
                     }
@@ -325,6 +346,13 @@ async fn start_test_hub() -> u16 {
                 for key in due_keys {
                     if let Some(actions) = h.schedule.remove(&key) {
                         for sa in actions {
+                            // Activation-time retention: activate param state now.
+                            if sa.signal_type == SignalType::Param {
+                                h.param_state.insert(
+                                    sa.address.clone(),
+                                    (sa.source, sa.message.clone()),
+                                );
+                            }
                             route_action(&h, sa.source, &sa.address, &sa.message).await;
                         }
                     }
@@ -1280,4 +1308,340 @@ async fn manifest_cleaned_up_on_disconnect() {
 
     sender.disconnect().await;
     receiver.disconnect().await;
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling conformance tests (Increment 6)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn immediate_dispatch() {
+    let port = start_test_hub().await;
+
+    let sender = Hub::connect(port, "sender")
+        .await
+        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Send with timestamp = 0.0 (immediate).
+    sender
+        .send_action(action(
+            "/test",
+            SignalType::Event,
+            0.0,
+            Value::Integer(1),
+        ))
+        .await
+        .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for immediate action")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_integer(&map, "payload"), Some(1));
+
+    sender.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn past_timestamp_dispatches_immediately() {
+    let port = start_test_hub().await;
+
+    let sender = Hub::connect(port, "sender")
+        .await
+        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Send with a past timestamp — should dispatch immediately.
+    sender
+        .send_action(action(
+            "/test",
+            SignalType::Event,
+            -5.0, // 5 seconds in the past
+            Value::Integer(2),
+        ))
+        .await
+        .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for past-timestamp action")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    assert_eq!(get_integer(&map, "payload"), Some(2));
+
+    sender.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn not_before_delivery() {
+    let port = start_test_hub().await;
+
+    let sender = Hub::connect(port, "sender")
+        .await
+        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // Schedule an action 0.5s in the future.
+    let future_time = sender.now().await + 0.5;
+    let before_send = std::time::Instant::now();
+
+    sender
+        .send_action(action(
+            "/test",
+            SignalType::Event,
+            future_time,
+            Value::Integer(3),
+        ))
+        .await
+        .unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        receiver.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for scheduled action")
+    .expect("Channel closed");
+
+    let elapsed = before_send.elapsed();
+    let map = payload_map(&msg);
+    assert_eq!(get_integer(&map, "payload"), Some(3));
+    // Should have taken at least 400ms (allowing some slack for scheduling).
+    assert!(
+        elapsed.as_millis() >= 400,
+        "Action arrived too early: {:?}",
+        elapsed
+    );
+
+    sender.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn per_sender_fifo_ordering() {
+    let port = start_test_hub().await;
+
+    let sender = Hub::connect(port, "sender")
+        .await
+        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver")
+        .await
+        .unwrap();
+
+    receiver.subscribe("/test").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Send three actions with the same timestamp.
+    let now = sender.now().await;
+    for i in 0..3 {
+        sender
+            .send_action(action(
+                "/test",
+                SignalType::Event,
+                now,
+                Value::Integer(i),
+            ))
+            .await
+            .unwrap();
+    }
+
+    // Receive them — should be in FIFO order.
+    for expected in 0..3 {
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            receiver.recv_action(),
+        )
+        .await
+        .expect(&format!("Timed out waiting for action {}", expected))
+        .expect("Channel closed");
+
+        let map = payload_map(&msg);
+        let payload = get_integer(&map, "payload").unwrap_or(-1);
+        assert_eq!(payload, expected, "FIFO ordering violated");
+    }
+
+    sender.disconnect().await;
+    receiver.disconnect().await;
+}
+
+#[tokio::test]
+async fn activation_time_retention() {
+    let port = start_test_hub().await;
+
+    let setter = Hub::connect(port, "setter")
+        .await
+        .unwrap();
+
+    // Set an immediate param value.
+    setter
+        .send_action(action(
+            "/level",
+            SignalType::Param,
+            0.0,
+            Value::Float(FloatValue::new(0.5)),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Schedule a future param value.
+    let future_time = setter.now().await + 0.5;
+    setter
+        .send_action(action(
+            "/level",
+            SignalType::Param,
+            future_time,
+            Value::Float(FloatValue::new(0.8)),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // A late joiner should receive the current value (0.5), not the future value (0.8).
+    let mut joiner = Hub::connect(port, "joiner")
+        .await
+        .unwrap();
+    joiner.subscribe("/level").await.unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        joiner.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for param replay")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let payload = get_float(&map, "payload").unwrap_or(0.0);
+    assert!(
+        (payload - 0.5).abs() < 0.01,
+        "Expected current value 0.5, got {}",
+        payload
+    );
+
+    // Wait for the future param to activate.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Now a new joiner should receive the activated value (0.8).
+    let mut joiner2 = Hub::connect(port, "joiner2")
+        .await
+        .unwrap();
+    joiner2.subscribe("/level").await.unwrap();
+
+    let msg2 = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        joiner2.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for activated param")
+    .expect("Channel closed");
+
+    let map2 = payload_map(&msg2);
+    let payload2 = get_float(&map2, "payload").unwrap_or(0.0);
+    assert!(
+        (payload2 - 0.8).abs() < 0.01,
+        "Expected activated value 0.8, got {}",
+        payload2
+    );
+
+    setter.disconnect().await;
+    joiner.disconnect().await;
+    joiner2.disconnect().await;
+}
+
+#[tokio::test]
+async fn snapshot_consistency() {
+    let port = start_test_hub().await;
+
+    let setter = Hub::connect(port, "setter")
+        .await
+        .unwrap();
+
+    // Set an immediate param value.
+    setter
+        .send_action(action(
+            "/temp",
+            SignalType::Param,
+            0.0,
+            Value::Float(FloatValue::new(20.0)),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Schedule a future param value.
+    let future_time = setter.now().await + 1.0;
+    setter
+        .send_action(action(
+            "/temp",
+            SignalType::Param,
+            future_time,
+            Value::Float(FloatValue::new(25.0)),
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Subscribe — snapshot should only include the current value (20.0).
+    let mut subscriber = Hub::connect(port, "subscriber")
+        .await
+        .unwrap();
+    subscriber.subscribe("/temp").await.unwrap();
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        subscriber.recv_action(),
+    )
+    .await
+    .expect("Timed out waiting for snapshot")
+    .expect("Channel closed");
+
+    let map = payload_map(&msg);
+    let payload = get_float(&map, "payload").unwrap_or(0.0);
+    assert!(
+        (payload - 20.0).abs() < 0.01,
+        "Snapshot should contain current value 20.0, got {}",
+        payload
+    );
+
+    // Should NOT receive the future value (25.0) in the snapshot.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        subscriber.recv_action(),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "Snapshot should not include future-scheduled params"
+    );
+
+    setter.disconnect().await;
+    subscriber.disconnect().await;
 }

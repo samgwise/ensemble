@@ -12,10 +12,9 @@
 //!
 //! For routing and pattern matching, see the `ensemble-routing` crate.
 
-pub mod clock;
 pub mod codec;
 pub mod protocol;
 
-pub use clock::ClockSync;
 pub use codec::{read_message, write_message, CodecError};
+pub use ensemble_clock::ClockSync;
 pub use protocol::*;

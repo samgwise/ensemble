@@ -70,7 +70,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 3. Protocol messages — commit: 291c6ec
 - [x] 4. Lifecycle — commit: 8c6dce0
 - [x] 5. Manifest — commit: 4ced5b3
-- [ ] 6. Scheduling — commit: _
+- [x] 6. Scheduling — commit: _
 - [ ] 7. Observability and hub events — commit: _
 - [ ] 8. Hub / TUI split — commit: _
 - [ ] 9. Conformance harness — commit: _
@@ -156,7 +156,7 @@ Acceptance criteria:
 - Subscribe triggers snapshot before live updates.
 - Future param values do not become current until their timestamp.
 - Streams may be dropped under congestion; events and params are not.
-Status: Not started. Depends on 6.1, 6.2, 6.3.
+Status: Complete.
 
 6.7 Observability and hub events
 Goal: emit reserved `/hub/**` actions and track diagnostics per the observability plane.

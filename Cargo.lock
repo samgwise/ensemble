@@ -224,6 +224,7 @@ dependencies = [
 name = "ensemble-client"
 version = "0.1.0"
 dependencies = [
+ "ensemble-clock",
  "ensemble-core",
  "ensemble-routing",
  "tokio",
@@ -231,9 +232,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ensemble-clock"
+version = "0.1.0"
+
+[[package]]
 name = "ensemble-core"
 version = "0.1.0"
 dependencies = [
+ "ensemble-clock",
  "ensemble-manifest",
  "ensemble-protocol",
  "ensemble-values",

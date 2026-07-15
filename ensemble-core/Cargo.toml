@@ -8,6 +8,7 @@ license.workspace = true
 ensemble-values = { path = "../ensemble-values" }
 ensemble-protocol = { path = "../ensemble-protocol" }
 ensemble-manifest = { path = "../ensemble-manifest" }
+ensemble-clock = { path = "../ensemble-clock" }
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
 tokio = { version = "1", features = ["io-util"] }
