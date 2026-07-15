@@ -145,6 +145,12 @@ pub struct Hub {
     action_rx: mpsc::Receiver<WireMessage>,
     /// Shared clock state.
     clock: Arc<Mutex<LocalClock>>,
+    /// Handle to the reader task (aborted on drop to close connection).
+    reader_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Handle to the writer task.
+    writer_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Handle to the clock sync task.
+    clock_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Hub {
@@ -195,7 +201,7 @@ impl Hub {
         let (action_tx, action_rx) = mpsc::channel::<WireMessage>(256);
 
         // Writer task — sends queued messages to the hub.
-        tokio::spawn(async move {
+        let writer_handle = tokio::spawn(async move {
             while let Some(msg) = write_rx.recv().await {
                 if codec::write_message(&mut writer, &msg).await.is_err() {
                     break;
@@ -206,7 +212,7 @@ impl Hub {
         // Reader task — receives messages from the hub, dispatches clock pong
         // and action messages.
         let reader_clock = clock.clone();
-        tokio::spawn(async move {
+        let reader_handle = tokio::spawn(async move {
             loop {
                 match codec::read_message(&mut reader).await {
                     Ok(msg) => {
@@ -240,7 +246,7 @@ impl Hub {
         // Clock sync task — sends periodic clock pings.
         let sync_tx = write_tx.clone();
         let sync_clock = clock.clone();
-        tokio::spawn(async move {
+        let clock_handle = tokio::spawn(async move {
             loop {
                 {
                     let mut clk = sync_clock.lock().await;
@@ -264,6 +270,9 @@ impl Hub {
             tx: write_tx,
             action_rx,
             clock,
+            reader_handle: Some(reader_handle),
+            writer_handle: Some(writer_handle),
+            clock_handle: Some(clock_handle),
         })
     }
 
@@ -305,6 +314,15 @@ impl Hub {
             .map_err(|_| CodecError::ConnectionClosed)
     }
 
+    /// Update the advertised name for this voice.
+    pub async fn send_update_name(&self, name: &str) -> Result<(), CodecError> {
+        let msg = update_name(name);
+        self.tx
+            .send(msg)
+            .await
+            .map_err(|_| CodecError::ConnectionClosed)
+    }
+
     /// Get the current estimated hub time.
     pub async fn now(&self) -> f64 {
         self.clock.lock().await.hub_now()
@@ -318,5 +336,20 @@ impl Hub {
     /// Send a disconnect message and close the connection.
     pub async fn disconnect(self) {
         let _ = self.tx.send(disconnect()).await;
+    }
+}
+
+impl Drop for Hub {
+    fn drop(&mut self) {
+        // Abort all spawned tasks to close the TCP connection.
+        if let Some(handle) = self.reader_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.writer_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.clock_handle.take() {
+            handle.abort();
+        }
     }
 }

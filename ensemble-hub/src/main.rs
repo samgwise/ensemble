@@ -85,6 +85,20 @@ impl HubState {
         }
         self.event_log.push(msg);
     }
+
+    /// Remove a voice and all its associated state (subscriptions, params).
+    fn remove_voice(&mut self, voice_id: VoiceId, reason: &str) {
+        self.log(format!("Voice {voice_id} disconnected ({reason})"));
+        self.voices.remove(&voice_id);
+        // Remove param state owned by this voice.
+        self.param_state.retain(|_, (source, _)| *source != voice_id);
+        // Remove scheduled actions from this voice.
+        for actions in self.schedule.values_mut() {
+            actions.retain(|sa| sa.source != voice_id);
+        }
+        // Clean up empty schedule entries.
+        self.schedule.retain(|_, actions| !actions.is_empty());
+    }
 }
 
 type SharedState = Arc<Mutex<HubState>>;
@@ -357,8 +371,7 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 
                     MSG_DISCONNECT => {
                         let mut st = state.lock().await;
-                        st.log(format!("Voice {voice_id} disconnected (disconnect)"));
-                        st.voices.remove(&voice_id);
+                        st.remove_voice(voice_id, "disconnect");
                         break;
                     }
 
@@ -389,15 +402,13 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 
             Err(CodecError::ConnectionClosed) => {
                 let mut st = state.lock().await;
-                st.log(format!("Voice {voice_id} disconnected (connection closed)"));
-                st.voices.remove(&voice_id);
+                st.remove_voice(voice_id, "connection closed");
                 break;
             }
 
             Err(e) => {
                 let mut st = state.lock().await;
-                st.log(format!("Voice {voice_id}: read error: {e}"));
-                st.voices.remove(&voice_id);
+                st.remove_voice(voice_id, &format!("read error: {e}"));
                 break;
             }
         }
