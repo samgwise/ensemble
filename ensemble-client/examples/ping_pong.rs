@@ -3,22 +3,33 @@
 //! Run the hub first:  cargo run --bin ensemble-hub
 //! Then this example:  cargo run --example ping_pong
 
+use std::collections::BTreeMap;
 use ensemble_client::Hub;
 use ensemble_core::protocol::*;
+
+/// Extract payload map from WireMessage.
+fn payload_map(msg: &WireMessage) -> BTreeMap<String, Value> {
+    match &msg.payload {
+        Value::Map(m) => m.clone(),
+        _ => BTreeMap::new(),
+    }
+}
 
 #[tokio::main]
 async fn main() {
     println!("Connecting two voices to the hub on port 7331...\n");
 
     // Voice A: subscribes to /pong, sends /ping.
-    let hub_a = Hub::connect(7331, "ping-voice", vec!["/pong".into()])
+    let hub_a = Hub::connect(7331, "ping-voice")
         .await
         .expect("Failed to connect voice A — is the hub running?");
+    hub_a.subscribe("/pong").await.unwrap();
 
     // Voice B: subscribes to /ping, sends /pong.
-    let mut hub_b = Hub::connect(7331, "pong-voice", vec!["/ping".into()])
+    let mut hub_b = Hub::connect(7331, "pong-voice")
         .await
         .expect("Failed to connect voice B");
+    hub_b.subscribe("/ping").await.unwrap();
 
     println!(
         "Voice A (id={}) connected, Voice B (id={}) connected",
@@ -34,31 +45,35 @@ async fn main() {
     // Voice A sends a ping.
     println!("Voice A sending /ping...");
     hub_a
-        .send_action(Action {
-            address: "/ping".into(),
-            signal_type: SignalType::Event,
-            timestamp: 0.0,
-            payload: Value::String("hello from A!".into()),
-        })
+        .send_action(action(
+            "/ping",
+            SignalType::Event,
+            0.0,
+            Value::String("hello from A!".into()),
+        ))
         .await
         .unwrap();
 
     // Voice B receives the ping.
-    if let Some((source, action)) = hub_b.recv_action().await {
+    if let Some(action_msg) = hub_b.recv_action().await {
+        let map = payload_map(&action_msg);
+        let source = get_integer(&map, "source").unwrap_or(0);
+        let address = get_string(&map, "address").unwrap_or_default();
+        let payload = get_value(&map, "payload").unwrap_or(Value::Null);
+
         println!(
-            "Voice B received from voice {source}: {} => {:?}",
-            action.address, action.payload
+            "Voice B received from voice {source}: {address} => {payload:?}"
         );
 
         // Voice B sends a pong back.
         println!("Voice B sending /pong...");
         hub_b
-            .send_action(Action {
-                address: "/pong".into(),
-                signal_type: SignalType::Event,
-                timestamp: 0.0,
-            payload: Value::String("hello back from B!".into()),
-            })
+            .send_action(action(
+                "/pong",
+                SignalType::Event,
+                0.0,
+                Value::String("hello back from B!".into()),
+            ))
             .await
             .unwrap();
     }

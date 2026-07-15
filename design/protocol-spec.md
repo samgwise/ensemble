@@ -372,6 +372,7 @@ Client ↔ Hub
 Payload:
 
 {
+    source: VoiceId,
     address: String,
     signal_type: SignalType,
     timestamp: f64,
@@ -379,11 +380,14 @@ Payload:
 }
 
 
+The `source` field is the VoiceId of the originating voice, set by the hub when routing. Clients sending actions to the hub may omit `source` (the hub assigns it based on the sending connection). Clients receiving routed actions use `source` to identify the originator.
+
 Example:
 
 {
   "type": "action",
   "payload": {
+    "source": 3,
     "address": "/transport/bpm",
     "signal_type": "param",
     "timestamp": 10.5,

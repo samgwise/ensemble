@@ -67,7 +67,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 
 - [x] 1. Routing — commit: f458a86
 - [x] 2. Value model — commit: bfe4be8
-- [ ] 3. Protocol messages — commit: _
+- [x] 3. Protocol messages — commit: _
 - [ ] 4. Lifecycle — commit: _
 - [ ] 5. Manifest — commit: _
 - [ ] 6. Scheduling — commit: _
@@ -117,7 +117,7 @@ Acceptance criteria:
 - `cargo test -p ensemble-protocol` passes protocol conformance.
 - Hub returns `error` and closes on unsupported `protocol_version`.
 - Clock sync uses `clock_ping`/`clock_pong`; old `ClockSyncRequest/Reply` and `Goodbye` removed.
-Status: Not started. Depends on 6.2.
+Status: Complete.
 
 6.4 Lifecycle
 Goal: separate connection from subscriptions, manifests, and naming per `design/lifecycle.md`.

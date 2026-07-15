@@ -5,7 +5,7 @@
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::protocol::Message;
+use crate::protocol::WireMessage;
 
 /// Maximum frame size (1 MiB) to prevent memory exhaustion from malformed data.
 const MAX_FRAME_SIZE: u32 = 1024 * 1024;
@@ -28,7 +28,7 @@ pub enum CodecError {
 /// Write a message as a length-prefixed MessagePack frame.
 pub async fn write_message<W: AsyncWriteExt + Unpin>(
     writer: &mut W,
-    msg: &Message,
+    msg: &WireMessage,
 ) -> Result<(), CodecError> {
     let payload = rmp_serde::to_vec_named(msg)?;
     let len = payload.len() as u32;
@@ -38,11 +38,11 @@ pub async fn write_message<W: AsyncWriteExt + Unpin>(
     Ok(())
 }
 
-/// Read a length-prefixed MessagePack frame and decode it as a Message.
+/// Read a length-prefixed MessagePack frame and decode it as a WireMessage.
 /// Returns `None` if the connection was cleanly closed (EOF on length read).
 pub async fn read_message<R: AsyncReadExt + Unpin>(
     reader: &mut R,
-) -> Result<Message, CodecError> {
+) -> Result<WireMessage, CodecError> {
     let mut len_buf = [0u8; 4];
     match reader.read_exact(&mut len_buf).await {
         Ok(_) => {}
@@ -60,7 +60,7 @@ pub async fn read_message<R: AsyncReadExt + Unpin>(
     let mut payload = vec![0u8; len as usize];
     reader.read_exact(&mut payload).await?;
 
-    let msg: Message = rmp_serde::from_slice(&payload)?;
+    let msg: WireMessage = rmp_serde::from_slice(&payload)?;
     Ok(msg)
 }
 
@@ -71,11 +71,7 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_hello() {
-        let msg = Message::Hello(VoiceCapabilities {
-            name: "test-voice".into(),
-            subscriptions: vec!["/test/*".into()],
-            is_bridge: false,
-        });
+        let msg = hello("test-voice");
 
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
@@ -88,15 +84,12 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_action() {
-        let msg = Message::ActionMessage {
-            source: 42,
-            action: Action {
-                address: "/synth/note".into(),
-                signal_type: SignalType::Event,
-                timestamp: 0.0,
-                payload: Value::Integer(60),
-            },
-        };
+        let msg = action(
+            "/synth/note",
+            SignalType::Event,
+            0.0,
+            Value::Integer(60),
+        );
 
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
@@ -109,10 +102,7 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_welcome() {
-        let msg = Message::Welcome {
-            voice_id: 7,
-            hub_time: 12.345,
-        };
+        let msg = welcome(7);
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -120,8 +110,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_goodbye() {
-        let msg = Message::Goodbye;
+    async fn roundtrip_disconnect() {
+        let msg = disconnect();
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -129,10 +119,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_clock_sync_request() {
-        let msg = Message::ClockSyncRequest {
-            voice_send_time: 1.23456,
-        };
+    async fn roundtrip_clock_ping() {
+        let msg = clock_ping(123);
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -140,12 +128,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_clock_sync_reply() {
-        let msg = Message::ClockSyncReply {
-            voice_send_time: 1.0,
-            hub_receive_time: 1.001,
-            hub_send_time: 1.002,
-        };
+    async fn roundtrip_clock_pong() {
+        let msg = clock_pong(123, 1.23456);
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -154,9 +138,7 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_subscribe() {
-        let msg = Message::Subscribe {
-            patterns: vec!["/midi/*".into(), "/clock".into()],
-        };
+        let msg = subscribe("/midi/**");
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -165,9 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_unsubscribe() {
-        let msg = Message::Unsubscribe {
-            patterns: vec!["/old/*".into()],
-        };
+        let msg = unsubscribe("/old/**");
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -176,21 +156,18 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_all_payload_types() {
-        let msg = Message::ActionMessage {
-            source: 1,
-            action: Action {
-                address: "/test".into(),
-                signal_type: SignalType::Param,
-                timestamp: 99.9,
-                payload: Value::Tuple(vec![
-                    Value::Float(FloatValue::new(0.5)),
-                    Value::Integer(-42),
-                    Value::Bool(true),
-                    Value::String("g'day".into()),
-                    Value::Binary(vec![0xDE, 0xAD]),
-                ]),
-            },
-        };
+        let msg = action(
+            "/test",
+            SignalType::Param,
+            99.9,
+            Value::Tuple(vec![
+                Value::Float(FloatValue::new(0.5)),
+                Value::Integer(-42),
+                Value::Bool(true),
+                Value::String("g'day".into()),
+                Value::Binary(vec![0xDE, 0xAD]),
+            ]),
+        );
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -199,15 +176,12 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_empty_payload() {
-        let msg = Message::ActionMessage {
-            source: 1,
-            action: Action {
-                address: "/bang".into(),
-                signal_type: SignalType::Event,
-                timestamp: 0.0,
-                payload: Value::Null,
-            },
-        };
+        let msg = action(
+            "/bang",
+            SignalType::Event,
+            0.0,
+            Value::Null,
+        );
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -243,13 +217,9 @@ mod tests {
     #[tokio::test]
     async fn multiple_messages_in_sequence() {
         let msgs = vec![
-            Message::Goodbye,
-            Message::ClockSyncRequest { voice_send_time: 5.0 },
-            Message::Hello(VoiceCapabilities {
-                name: "multi".into(),
-                subscriptions: vec![],
-                is_bridge: true,
-            }),
+            disconnect(),
+            clock_ping(5),
+            hello("multi"),
         ];
 
         let mut buf = Vec::new();

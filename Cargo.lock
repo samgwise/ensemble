@@ -234,6 +234,7 @@ dependencies = [
 name = "ensemble-core"
 version = "0.1.0"
 dependencies = [
+ "ensemble-protocol",
  "ensemble-values",
  "rmp-serde",
  "serde",
@@ -253,6 +254,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ensemble-protocol"
+version = "0.1.0"
+dependencies = [
+ "ensemble-values",
+ "rmp-serde",
+ "serde",
 ]
 
 [[package]]

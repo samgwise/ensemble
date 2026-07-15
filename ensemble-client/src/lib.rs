@@ -13,30 +13,39 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     // Connect to the hub, subscribing to actions under /other/.
-//!     let mut hub = Hub::connect(7331, "my-tool", vec!["/other/*".into()])
+//!     // Connect to the hub.
+//!     let mut hub = Hub::connect(7331, "my-tool")
 //!         .await.unwrap();
 //!
+//!     // Subscribe to actions under /other/.
+//!     hub.subscribe("/other/*").await.unwrap();
+//!
 //!     // Send an action (immediate delivery).
-//!     hub.send_action(Action {
-//!         address: "/my-tool/ping".into(),
-//!         signal_type: SignalType::Event,
-//!         timestamp: 0.0,
-//!         payload: Value::Null,
-//!     }).await.unwrap();
+//!     hub.send_action(action(
+//!         "/my-tool/ping",
+//!         SignalType::Event,
+//!         0.0,
+//!         Value::Null,
+//!     )).await.unwrap();
 //!
 //!     // Schedule an action 1 second in the future.
 //!     let future_time = hub.now().await + 1.0;
-//!     hub.send_action(Action {
-//!         address: "/my-tool/delayed".into(),
-//!         signal_type: SignalType::Event,
-//!         timestamp: future_time,
-//!         payload: Value::String("g'day".into()),
-//!     }).await.unwrap();
+//!     hub.send_action(action(
+//!         "/my-tool/delayed",
+//!         SignalType::Event,
+//!         future_time,
+//!         Value::String("g'day".into()),
+//!     )).await.unwrap();
 //!
 //!     // Receive actions routed to us.
-//!     if let Some((source_voice, action)) = hub.recv_action().await {
-//!         println!("Received {} from voice {}", action.address, source_voice);
+//!     if let Some(action_msg) = hub.recv_action().await {
+//!         let map = match &action_msg.payload {
+//!             Value::Map(m) => m,
+//!             _ => panic!("Expected Map payload"),
+//!         };
+//!         let source = get_integer(map, "source").unwrap_or(0);
+//!         let address = get_string(map, "address").unwrap_or_default();
+//!         println!("Received {} from voice {}", address, source);
 //!     }
 //!
 //!     hub.disconnect().await;
@@ -59,6 +68,10 @@ struct LocalClock {
     origin: Instant,
     /// Shared sync algorithm from ensemble-core.
     sync: ClockSync,
+    /// Next clock ping sequence number.
+    next_sequence: u64,
+    /// Track when each ping was sent (sequence -> local time).
+    pending_pings: std::collections::HashMap<u64, f64>,
 }
 
 impl LocalClock {
@@ -66,6 +79,8 @@ impl LocalClock {
         Self {
             origin: Instant::now(),
             sync: ClockSync::new(),
+            next_sequence: 0,
+            pending_pings: std::collections::HashMap::new(),
         }
     }
 
@@ -79,10 +94,36 @@ impl LocalClock {
         self.sync.to_hub_time(self.local_now())
     }
 
-    /// Process a clock sync reply.
-    fn process_reply(&mut self, voice_send_time: f64, hub_receive_time: f64, hub_send_time: f64) {
+    /// Record when a ping was sent.
+    fn record_ping(&mut self, sequence: u64) {
+        self.pending_pings.insert(sequence, self.local_now());
+    }
+
+    /// Process a clock pong reply.
+    fn process_pong(&mut self, sequence: u64, hub_time: f64) {
         let voice_receive_time = self.local_now();
-        self.sync.process_reply(voice_send_time, hub_receive_time, hub_send_time, voice_receive_time);
+        
+        // Look up when we sent this ping.
+        if let Some(voice_send_time) = self.pending_pings.remove(&sequence) {
+            // The new protocol only gives us hub_time (when the hub sent the pong).
+            // We assume the hub received the ping and sent the pong at essentially
+            // the same time (zero processing time), so hub_receive_time = hub_send_time = hub_time.
+            // This is a reasonable approximation for localhost and low-latency networks.
+            self.sync.process_reply(
+                voice_send_time,
+                hub_time,
+                hub_time,
+                voice_receive_time,
+            );
+        }
+    }
+
+    /// Get the next sequence number for clock ping and record when it's sent.
+    fn next_sequence(&mut self) -> u64 {
+        let seq = self.next_sequence;
+        self.next_sequence += 1;
+        self.record_ping(seq);
+        seq
     }
 
     fn is_synced(&self) -> bool {
@@ -99,9 +140,9 @@ pub struct Hub {
     /// Our assigned voice ID.
     pub voice_id: VoiceId,
     /// Channel to send messages to the writer task.
-    tx: mpsc::Sender<Message>,
+    tx: mpsc::Sender<WireMessage>,
     /// Channel to receive routed actions from the hub.
-    action_rx: mpsc::Receiver<(VoiceId, Action)>,
+    action_rx: mpsc::Receiver<WireMessage>,
     /// Shared clock state.
     clock: Arc<Mutex<LocalClock>>,
 }
@@ -111,7 +152,6 @@ impl Hub {
     pub async fn connect(
         port: u16,
         name: &str,
-        subscriptions: Vec<String>,
     ) -> Result<Self, CodecError> {
         let stream = TcpStream::connect(format!("127.0.0.1:{port}"))
             .await
@@ -122,27 +162,37 @@ impl Hub {
         let mut writer = BufWriter::new(writer);
 
         // Send Hello.
-        let hello = Message::Hello(VoiceCapabilities {
-            name: name.to_string(),
-            subscriptions,
-            is_bridge: false,
-        });
-        codec::write_message(&mut writer, &hello).await?;
+        let hello_msg = hello(name);
+        codec::write_message(&mut writer, &hello_msg).await?;
 
         // Wait for Welcome.
-        let voice_id = match codec::read_message(&mut reader).await? {
-            Message::Welcome { voice_id, .. } => voice_id,
-            other => {
+        let welcome_msg = codec::read_message(&mut reader).await?;
+        if welcome_msg.msg_type != MSG_WELCOME {
+            return Err(CodecError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected welcome, got {:?}", welcome_msg.msg_type),
+            )));
+        }
+        let welcome_map = match &welcome_msg.payload {
+            Value::Map(m) => m.clone(),
+            _ => {
                 return Err(CodecError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Expected Welcome, got {other:?}"),
+                    "Welcome payload must be a Map",
                 )));
             }
         };
+        let voice_id = get_integer(&welcome_map, "voice_id")
+            .ok_or_else(|| {
+                CodecError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Welcome missing voice_id",
+                ))
+            })? as VoiceId;
 
         let clock = Arc::new(Mutex::new(LocalClock::new()));
-        let (write_tx, mut write_rx) = mpsc::channel::<Message>(256);
-        let (action_tx, action_rx) = mpsc::channel::<(VoiceId, Action)>(256);
+        let (write_tx, mut write_rx) = mpsc::channel::<WireMessage>(256);
+        let (action_tx, action_rx) = mpsc::channel::<WireMessage>(256);
 
         // Writer task — sends queued messages to the hub.
         tokio::spawn(async move {
@@ -153,47 +203,49 @@ impl Hub {
             }
         });
 
-        // Reader task — receives messages from the hub, dispatches clock sync
-        // replies and action messages.
+        // Reader task — receives messages from the hub, dispatches clock pong
+        // and action messages.
         let reader_clock = clock.clone();
-        let reader_tx = write_tx.clone();
         tokio::spawn(async move {
             loop {
                 match codec::read_message(&mut reader).await {
-                    Ok(Message::ClockSyncReply {
-                        voice_send_time,
-                        hub_receive_time,
-                        hub_send_time,
-                    }) => {
-                        let mut clk = reader_clock.lock().await;
-                        clk.process_reply(voice_send_time, hub_receive_time, hub_send_time);
+                    Ok(msg) => {
+                        match msg.msg_type.as_str() {
+                            MSG_CLOCK_PONG => {
+                                let map = match &msg.payload {
+                                    Value::Map(m) => m.clone(),
+                                    _ => continue,
+                                };
+                                let sequence = get_integer(&map, "sequence").unwrap_or(0) as u64;
+                                let hub_time = get_float(&map, "hub_time").unwrap_or(0.0);
+                                let mut clk = reader_clock.lock().await;
+                                clk.process_pong(sequence, hub_time);
+                            }
+                            MSG_ACTION => {
+                                let _ = action_tx.send(msg).await;
+                            }
+                            MSG_ERROR => {
+                                // Log errors but continue (could be non-fatal)
+                                eprintln!("Hub error: {:?}", msg.payload);
+                            }
+                            _ => {} // Ignore other messages
+                        }
                     }
-
-                    Ok(Message::ActionMessage { source, action }) => {
-                        let _ = action_tx.send((source, action)).await;
-                    }
-
                     Err(CodecError::ConnectionClosed) => break,
                     Err(_) => break,
-
-                    _ => {} // Ignore other messages.
                 }
             }
-            // Connection lost — reader task exits.
-            drop(reader_tx);
         });
 
-        // Clock sync task — sends periodic sync requests.
+        // Clock sync task — sends periodic clock pings.
         let sync_tx = write_tx.clone();
         let sync_clock = clock.clone();
         tokio::spawn(async move {
             loop {
                 {
-                    let clk = sync_clock.lock().await;
-                    let voice_send_time = clk.local_now();
-                    let _ = sync_tx
-                        .send(Message::ClockSyncRequest { voice_send_time })
-                        .await;
+                    let mut clk = sync_clock.lock().await;
+                    let sequence = clk.next_sequence();
+                    let _ = sync_tx.send(clock_ping(sequence)).await;
                 }
                 // Sync frequently at first, then slow down.
                 let clk = sync_clock.lock().await;
@@ -216,11 +268,13 @@ impl Hub {
     }
 
     /// Send an action to the hub for routing.
-    pub async fn send_action(&self, action: Action) -> Result<(), CodecError> {
-        let msg = Message::ActionMessage {
-            source: self.voice_id,
-            action,
-        };
+    pub async fn send_action(&self, msg: WireMessage) -> Result<(), CodecError> {
+        if msg.msg_type != MSG_ACTION {
+            return Err(CodecError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "send_action only accepts action messages",
+            )));
+        }
         self.tx
             .send(msg)
             .await
@@ -229,8 +283,26 @@ impl Hub {
 
     /// Receive the next action routed to this voice.
     /// Returns `None` if the connection is closed.
-    pub async fn recv_action(&mut self) -> Option<(VoiceId, Action)> {
+    pub async fn recv_action(&mut self) -> Option<WireMessage> {
         self.action_rx.recv().await
+    }
+
+    /// Subscribe to actions matching the given pattern.
+    pub async fn subscribe(&self, pattern: &str) -> Result<(), CodecError> {
+        let msg = subscribe(pattern);
+        self.tx
+            .send(msg)
+            .await
+            .map_err(|_| CodecError::ConnectionClosed)
+    }
+
+    /// Unsubscribe from a previously registered pattern.
+    pub async fn unsubscribe(&self, pattern: &str) -> Result<(), CodecError> {
+        let msg = unsubscribe(pattern);
+        self.tx
+            .send(msg)
+            .await
+            .map_err(|_| CodecError::ConnectionClosed)
     }
 
     /// Get the current estimated hub time.
@@ -243,8 +315,8 @@ impl Hub {
         self.clock.lock().await.is_synced()
     }
 
-    /// Send a Goodbye message and close the connection.
+    /// Send a disconnect message and close the connection.
     pub async fn disconnect(self) {
-        let _ = self.tx.send(Message::Goodbye).await;
+        let _ = self.tx.send(disconnect()).await;
     }
 }

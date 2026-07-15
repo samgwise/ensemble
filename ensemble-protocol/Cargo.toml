@@ -1,16 +1,10 @@
 [package]
-name = "ensemble-core"
+name = "ensemble-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 ensemble-values = { path = "../ensemble-values" }
-ensemble-protocol = { path = "../ensemble-protocol" }
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
-tokio = { version = "1", features = ["io-util"] }
-thiserror = "2"
-
-[dev-dependencies]
-tokio = { version = "1", features = ["full"] }

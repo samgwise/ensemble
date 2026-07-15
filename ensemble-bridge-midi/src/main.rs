@@ -137,10 +137,17 @@ async fn run_action_router(
     midi_tx: mpsc::Sender<MidiOutCmd>,
     key_store: Arc<Mutex<KeyStateStore>>,
 ) {
-    while let Some((_source, action)) = hub.recv_action().await {
-        if action.address == "/midi/play" {
+    while let Some(action_msg) = hub.recv_action().await {
+        let map = match &action_msg.payload {
+            Value::Map(m) => m.clone(),
+            _ => continue,
+        };
+        let address = get_string(&map, "address").unwrap_or_default();
+        let payload = get_value(&map, "payload").unwrap_or(Value::Null);
+
+        if address == "/midi/play" {
             if let Some((channel, note, velocity, duration_secs)) =
-                parse_play_payload(&action.payload)
+                parse_play_payload(&payload)
             {
                 // Bump mutex — invalidates any previous pending note-off.
                 let event_id = {
@@ -173,23 +180,23 @@ async fn run_action_router(
                     }
                 });
             } else {
-                eprintln!("  /midi/play: invalid payload {:?}", action.payload);
+                eprintln!("  /midi/play: invalid payload {:?}", payload);
             }
-        } else if action.address == "/midi/cancel" {
-            if let Some((channel, note)) = parse_cancel_payload(&action.payload) {
+        } else if address == "/midi/cancel" {
+            if let Some((channel, note)) = parse_cancel_payload(&payload) {
                 // Bump mutex — any pending note-off with the old ID will be dropped.
                 let mut ks = key_store.lock().await;
                 ks.bump(channel, note);
                 eprintln!("  cancel: ch={channel} note={note}");
             }
-        } else if action.address == "/midi/cc" {
-            if let Some((channel, cc, val)) = parse_cc_payload(&action.payload) {
+        } else if address == "/midi/cc" {
+            if let Some((channel, cc, val)) = parse_cc_payload(&payload) {
                 let bytes = MidiBytes([0xB0 | channel, cc, val]);
                 let _ = midi_tx.send(MidiOutCmd::Send(bytes)).await;
                 eprintln!("  cc: ch={channel} cc={cc} val={val}");
             }
         } else {
-            eprintln!("  unhandled MIDI action: {}", action.address);
+            eprintln!("  unhandled MIDI action: {}", address);
         }
     }
 }
@@ -201,7 +208,7 @@ async fn run_action_router(
 /// Spawn a MIDI input listener that publishes incoming MIDI as Ensemble actions.
 fn spawn_midi_input(
     port_index: usize,
-    hub_tx: mpsc::Sender<Action>,
+    hub_tx: mpsc::Sender<WireMessage>,
 ) -> anyhow::Result<()> {
     let midi_in = MidiInput::new("ensemble-bridge-midi-in")?;
     let ports = midi_in.ports();
@@ -223,51 +230,51 @@ fn spawn_midi_input(
             let status = message[0] & 0xF0;
             let channel = message[0] & 0x0F;
 
-            let action = match status {
+            let msg = match status {
                 0x90 if message.len() >= 3 && message[2] > 0 => {
                     // Note-on (velocity > 0). We send as an Event — the receiving
                     // tool decides duration.
-                    Some(Action {
-                        address: "/midi/in/note-on".into(),
-                        signal_type: SignalType::Event,
-                        timestamp: 0.0,
-                        payload: Value::Tuple(vec![
+                    Some(action(
+                        "/midi/in/note-on",
+                        SignalType::Event,
+                        0.0,
+                        Value::Tuple(vec![
                             Value::Integer(channel as i64),
                             Value::Integer(message[1] as i64),
                             Value::Integer(message[2] as i64),
                         ]),
-                    })
+                    ))
                 }
                 0x80 | 0x90 => {
                     // Note-off (or note-on with velocity 0).
-                    Some(Action {
-                        address: "/midi/in/note-off".into(),
-                        signal_type: SignalType::Event,
-                        timestamp: 0.0,
-                        payload: Value::Tuple(vec![
+                    Some(action(
+                        "/midi/in/note-off",
+                        SignalType::Event,
+                        0.0,
+                        Value::Tuple(vec![
                             Value::Integer(channel as i64),
                             Value::Integer(message[1] as i64),
                         ]),
-                    })
+                    ))
                 }
                 0xB0 if message.len() >= 3 => {
                     // CC.
-                    Some(Action {
-                        address: "/midi/in/cc".into(),
-                        signal_type: SignalType::Event,
-                        timestamp: 0.0,
-                        payload: Value::Tuple(vec![
+                    Some(action(
+                        "/midi/in/cc",
+                        SignalType::Event,
+                        0.0,
+                        Value::Tuple(vec![
                             Value::Integer(channel as i64),
                             Value::Integer(message[1] as i64),
                             Value::Integer(message[2] as i64),
                         ]),
-                    })
+                    ))
                 }
                 _ => None,
             };
 
-            if let Some(action) = action {
-                let _ = tx.try_send(action);
+            if let Some(msg) = msg {
+                let _ = tx.try_send(msg);
             }
         },
         hub_tx,
@@ -360,15 +367,15 @@ async fn main() -> anyhow::Result<()> {
     let hub = Hub::connect(
         hub_port,
         "midi-bridge",
-        vec!["/midi/*".into()],
     )
     .await?;
+    hub.subscribe("/midi/*").await?;
     eprintln!("Connected to hub on port {hub_port} as voice #{}", hub.voice_id);
 
     // Optionally open MIDI input.
     if let Some(in_idx) = input_index {
-        let (action_tx, mut action_rx) = mpsc::channel::<Action>(256);
-        spawn_midi_input(in_idx, action_tx)?;
+        let (msg_tx, mut msg_rx) = mpsc::channel::<WireMessage>(256);
+        spawn_midi_input(in_idx, msg_tx)?;
 
         // Forward MIDI input actions to the hub.
         // We need a clone of the hub's send capability.
@@ -379,14 +386,19 @@ async fn main() -> anyhow::Result<()> {
         // For simplicity, we'll use the hub reference directly in the router
         // and spawn the input forwarder here.
         tokio::spawn(async move {
-            while let Some(action) = action_rx.recv().await {
+            while let Some(msg) = msg_rx.recv().await {
                 // We can't send from here without the Hub. This is a known
                 // limitation — the Hub struct owns recv. For v0.2, MIDI input
                 // actions are logged. Full bidirectional support needs Hub
                 // to expose a send-only handle.
+                let map = match &msg.payload {
+                    Value::Map(m) => m.clone(),
+                    _ => continue,
+                };
+                let address = get_string(&map, "address").unwrap_or_default();
                 eprintln!(
                     "MIDI input (voice {hub_for_input}): {} {:?}",
-                    action.address, action.payload
+                    address, msg.payload
                 );
             }
         });

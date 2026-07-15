@@ -14,20 +14,40 @@ use tokio::io::{BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
+/// Extract payload map from WireMessage.
+fn payload_map(msg: &WireMessage) -> BTreeMap<String, Value> {
+    match &msg.payload {
+        Value::Map(m) => m.clone(),
+        _ => BTreeMap::new(),
+    }
+}
+
+/// Parse SignalType from string.
+fn parse_signal_type(s: &str) -> Option<SignalType> {
+    match s {
+        "event" => Some(SignalType::Event),
+        "param" => Some(SignalType::Param),
+        "stream" => Some(SignalType::Stream),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Minimal in-process hub for testing (no TUI, no external dependencies)
 // ---------------------------------------------------------------------------
 
 struct TestVoice {
     id: VoiceId,
-    subscriptions: Vec<String>,
+    name: String,
     subscription_patterns: Vec<Pattern>,
-    tx: mpsc::Sender<Message>,
+    subscription_strings: Vec<String>,
+    tx: mpsc::Sender<WireMessage>,
 }
 
 struct ScheduledAction {
     source: VoiceId,
-    action: Action,
+    message: WireMessage,
+    address: String,
 }
 
 fn timestamp_key(t: f64) -> u64 {
@@ -38,7 +58,7 @@ struct TestHub {
     clock_origin: Instant,
     next_id: VoiceId,
     voices: HashMap<VoiceId, TestVoice>,
-    param_state: HashMap<String, (VoiceId, Action)>,
+    param_state: HashMap<String, (VoiceId, WireMessage)>,
     schedule: BTreeMap<u64, Vec<ScheduledAction>>,
 }
 
@@ -58,13 +78,9 @@ impl TestHub {
     }
 }
 
-async fn route_action(h: &TestHub, source: VoiceId, action: &Action) {
-    let msg = Message::ActionMessage {
-        source,
-        action: action.clone(),
-    };
+async fn route_action(h: &TestHub, source: VoiceId, address: &str, msg: &WireMessage) {
     for voice in h.voices.values() {
-        if voice.id != source && matches_any(&voice.subscription_patterns, &action.address) {
+        if voice.id != source && matches_any(&voice.subscription_patterns, address) {
             let _ = voice.tx.send(msg.clone()).await;
         }
     }
@@ -78,52 +94,46 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
     let mut writer = BufWriter::new(writer);
 
     // Wait for Hello.
-    let hello = match codec::read_message(&mut reader).await {
-        Ok(Message::Hello(caps)) => caps,
+    let hello_msg = match codec::read_message(&mut reader).await {
+        Ok(msg) if msg.msg_type == MSG_HELLO => msg,
         _ => return,
     };
 
-    // Parse subscription patterns.
-    let subscription_patterns: Vec<Pattern> = hello
-        .subscriptions
-        .iter()
-        .filter_map(|s| Pattern::parse(s).ok())
-        .collect();
+    let hello_map = payload_map(&hello_msg);
+    let voice_name = get_string(&hello_map, "name").unwrap_or_else(|| "unknown".into());
 
-    let (tx, mut rx) = mpsc::channel::<Message>(256);
+    let (tx, mut rx) = mpsc::channel::<WireMessage>(256);
     let voice_id;
     {
         let mut h = hub.lock().await;
         voice_id = h.next_id;
         h.next_id += 1;
-        let hub_time = h.now();
 
         h.voices.insert(
             voice_id,
             TestVoice {
                 id: voice_id,
-                subscriptions: hello.subscriptions.clone(),
-                subscription_patterns,
+                name: voice_name.clone(),
+                subscription_patterns: Vec::new(),
+                subscription_strings: Vec::new(),
                 tx: tx.clone(),
             },
         );
 
-        let welcome = Message::Welcome { voice_id, hub_time };
-        let _ = codec::write_message(&mut writer, &welcome).await;
+        let welcome_msg = welcome(voice_id);
+        let _ = codec::write_message(&mut writer, &welcome_msg).await;
 
-        // Replay param state to the new voice.
+        // Replay param state to the new voice (no subscriptions yet).
         let patterns: Vec<Pattern> = h
             .voices
             .get(&voice_id)
             .map(|v| v.subscription_patterns.clone())
             .unwrap_or_default();
-        for (source, action) in h.param_state.values() {
-            if matches_any(&patterns, &action.address) {
-                let msg = Message::ActionMessage {
-                    source: *source,
-                    action: action.clone(),
-                };
-                let _ = tx.send(msg).await;
+        for (_source, action_msg) in h.param_state.values() {
+            let action_map = payload_map(action_msg);
+            let address = get_string(&action_map, "address").unwrap_or_default();
+            if matches_any(&patterns, &address) {
+                let _ = tx.send(action_msg.clone()).await;
             }
         }
     }
@@ -140,47 +150,110 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
     // Read loop.
     loop {
         match codec::read_message(&mut reader).await {
-            Ok(Message::ClockSyncRequest { voice_send_time }) => {
-                let h = hub.lock().await;
-                let hub_time = h.now();
-                let reply = Message::ClockSyncReply {
-                    voice_send_time,
-                    hub_receive_time: hub_time,
-                    hub_send_time: hub_time,
-                };
-                let _ = tx.send(reply).await;
-            }
-            Ok(Message::ActionMessage { action, .. }) => {
-                let mut h = hub.lock().await;
+            Ok(msg) => {
+                match msg.msg_type.as_str() {
+                    MSG_CLOCK_PING => {
+                        let map = payload_map(&msg);
+                        let sequence = get_integer(&map, "sequence").unwrap_or(0) as u64;
+                        let h = hub.lock().await;
+                        let hub_time = h.now();
+                        let pong = clock_pong(sequence, hub_time);
+                        let _ = tx.send(pong).await;
+                    }
+                    MSG_ACTION => {
+                        let map = payload_map(&msg);
+                        let address = get_string(&map, "address").unwrap_or_default();
+                        let signal_type = get_string(&map, "signal_type")
+                            .and_then(|s| parse_signal_type(&s))
+                            .unwrap_or(SignalType::Event);
+                        let timestamp = get_float(&map, "timestamp").unwrap_or(0.0);
+                        let payload = get_value(&map, "payload").unwrap_or(Value::Null);
 
-                // Store param state.
-                if action.signal_type == SignalType::Param {
-                    h.param_state.insert(
-                        action.address.clone(),
-                        (voice_id, action.clone()),
-                    );
-                }
+                        let routed_msg = action_with_source(
+                            voice_id,
+                            address.clone(),
+                            signal_type,
+                            timestamp,
+                            payload,
+                        );
 
-                // Schedule or route immediately.
-                if action.timestamp > 0.0 && action.timestamp > h.now() {
-                    let key = timestamp_key(action.timestamp);
-                    h.schedule
-                        .entry(key)
-                        .or_default()
-                        .push(ScheduledAction {
-                            source: voice_id,
-                            action,
-                        });
-                } else {
-                    route_action(&h, voice_id, &action).await;
+                        let mut h = hub.lock().await;
+
+                        // Store param state.
+                        if signal_type == SignalType::Param {
+                            h.param_state.insert(
+                                address.clone(),
+                                (voice_id, routed_msg.clone()),
+                            );
+                        }
+
+                        // Schedule or route immediately.
+                        if timestamp > 0.0 && timestamp > h.now() {
+                            let key = timestamp_key(timestamp);
+                            h.schedule
+                                .entry(key)
+                                .or_default()
+                                .push(ScheduledAction {
+                                    source: voice_id,
+                                    message: routed_msg,
+                                    address,
+                                });
+                        } else {
+                            route_action(&h, voice_id, &address, &routed_msg).await;
+                        }
+                    }
+                    MSG_SUBSCRIBE => {
+                        let map = payload_map(&msg);
+                        let pat_str = get_string(&map, "pattern").unwrap_or_default();
+                        let mut h = hub.lock().await;
+                        if let Ok(p) = Pattern::parse(&pat_str) {
+                            // Collect matching param replays before mutating voice.
+                            let mut replays = Vec::new();
+                            if let Some(voice) = h.voices.get(&voice_id) {
+                                let mut patterns = voice.subscription_patterns.clone();
+                                patterns.push(p.clone());
+                                for (_source, action_msg) in h.param_state.values() {
+                                    let action_map = payload_map(action_msg);
+                                    let address = get_string(&action_map, "address")
+                                        .unwrap_or_default();
+                                    if matches_any(&patterns, &address) {
+                                        replays.push(action_msg.clone());
+                                    }
+                                }
+                            }
+                            // Now mutate voice and send replays.
+                            if let Some(voice) = h.voices.get_mut(&voice_id) {
+                                voice.subscription_patterns.push(p);
+                                voice.subscription_strings.push(pat_str);
+                                for action_msg in replays {
+                                    let _ = voice.tx.send(action_msg).await;
+                                }
+                            }
+                        }
+                    }
+                    MSG_UNSUBSCRIBE => {
+                        let map = payload_map(&msg);
+                        let pat_str = get_string(&map, "pattern").unwrap_or_default();
+                        let mut h = hub.lock().await;
+                        if let Some(voice) = h.voices.get_mut(&voice_id) {
+                            if let Some(pos) = voice.subscription_strings.iter().position(|s| s == &pat_str) {
+                                voice.subscription_strings.remove(pos);
+                                voice.subscription_patterns.remove(pos);
+                            }
+                        }
+                    }
+                    MSG_DISCONNECT | _ => {
+                        let mut h = hub.lock().await;
+                        h.voices.remove(&voice_id);
+                        break;
+                    }
                 }
             }
-            Ok(Message::Goodbye) | Err(_) => {
+            Err(_) => {
                 let mut h = hub.lock().await;
                 h.voices.remove(&voice_id);
                 break;
             }
-            _ => {}
         }
     }
 }
@@ -213,7 +286,7 @@ async fn start_test_hub() -> u16 {
                 for key in due_keys {
                     if let Some(actions) = h.schedule.remove(&key) {
                         for sa in actions {
-                            route_action(&h, sa.source, &sa.action).await;
+                            route_action(&h, sa.source, &sa.address, &sa.message).await;
                         }
                     }
                 }
@@ -236,31 +309,33 @@ async fn two_voices_exchange_actions() {
     let port = start_test_hub().await;
 
     // Voice A subscribes to /pong, sends /ping.
-    let hub_a = Hub::connect(port, "voice-a", vec!["/pong".into()])
+    let hub_a = Hub::connect(port, "voice-a")
         .await
         .unwrap();
+    hub_a.subscribe("/pong").await.unwrap();
 
     // Voice B subscribes to /ping, sends /pong.
-    let mut hub_b = Hub::connect(port, "voice-b", vec!["/ping".into()])
+    let mut hub_b = Hub::connect(port, "voice-b")
         .await
         .unwrap();
+    hub_b.subscribe("/ping").await.unwrap();
 
     // Allow clock sync to happen.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     // A sends a ping.
     hub_a
-        .send_action(Action {
-            address: "/ping".into(),
-            signal_type: SignalType::Event,
-            timestamp: 0.0,
-            payload: Value::String("hello".into()),
-        })
+        .send_action(action(
+            "/ping",
+            SignalType::Event,
+            0.0,
+            Value::String("hello".into()),
+        ))
         .await
         .unwrap();
 
     // B should receive it.
-    let (source, action) = tokio::time::timeout(
+    let action_msg = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         hub_b.recv_action(),
     )
@@ -268,12 +343,14 @@ async fn two_voices_exchange_actions() {
     .expect("Timed out waiting for action")
     .expect("Channel closed");
 
+    let map = payload_map(&action_msg);
+    let source = get_integer(&map, "source").unwrap_or(0) as VoiceId;
+    let address = get_string(&map, "address").unwrap_or_default();
+    let payload = get_value(&map, "payload").unwrap_or(Value::Null);
+
     assert_eq!(source, hub_a.voice_id);
-    assert_eq!(action.address, "/ping");
-    assert_eq!(
-        action.payload,
-        Value::String("hello".into())
-    );
+    assert_eq!(address, "/ping");
+    assert_eq!(payload, Value::String("hello".into()));
 
     hub_a.disconnect().await;
     hub_b.disconnect().await;
@@ -284,11 +361,12 @@ async fn wildcard_subscription_routes_subtree() {
     let port = start_test_hub().await;
 
     // Voice A subscribes to /synth/** — should receive anything under /synth/.
-    let mut hub_a = Hub::connect(port, "listener", vec!["/synth/**".into()])
+    let mut hub_a = Hub::connect(port, "listener")
         .await
         .unwrap();
+    hub_a.subscribe("/synth/**").await.unwrap();
 
-    let hub_b = Hub::connect(port, "sender", vec![])
+    let hub_b = Hub::connect(port, "sender")
         .await
         .unwrap();
 
@@ -296,16 +374,16 @@ async fn wildcard_subscription_routes_subtree() {
 
     // B sends to /synth/voice/1/note.
     hub_b
-        .send_action(Action {
-            address: "/synth/voice/1/note".into(),
-            signal_type: SignalType::Event,
-            timestamp: 0.0,
-            payload: Value::Integer(60),
-        })
+        .send_action(action(
+            "/synth/voice/1/note",
+            SignalType::Event,
+            0.0,
+            Value::Integer(60),
+        ))
         .await
         .unwrap();
 
-    let (_, action) = tokio::time::timeout(
+    let action_msg = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         hub_a.recv_action(),
     )
@@ -313,7 +391,9 @@ async fn wildcard_subscription_routes_subtree() {
     .expect("Timed out")
     .expect("Channel closed");
 
-    assert_eq!(action.address, "/synth/voice/1/note");
+    let map = payload_map(&action_msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+    assert_eq!(address, "/synth/voice/1/note");
 
     hub_a.disconnect().await;
     hub_b.disconnect().await;
@@ -324,23 +404,24 @@ async fn unsubscribed_voice_does_not_receive() {
     let port = start_test_hub().await;
 
     // Voice A subscribes to /other — should NOT receive /ping.
-    let mut hub_a = Hub::connect(port, "bystander", vec!["/other".into()])
+    let mut hub_a = Hub::connect(port, "bystander")
         .await
         .unwrap();
+    hub_a.subscribe("/other").await.unwrap();
 
-    let hub_b = Hub::connect(port, "sender", vec![])
+    let hub_b = Hub::connect(port, "sender")
         .await
         .unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     hub_b
-        .send_action(Action {
-            address: "/ping".into(),
-            signal_type: SignalType::Event,
-            timestamp: 0.0,
-            payload: Value::Null,
-        })
+        .send_action(action(
+            "/ping",
+            SignalType::Event,
+            0.0,
+            Value::Null,
+        ))
         .await
         .unwrap();
 
@@ -361,7 +442,7 @@ async fn unsubscribed_voice_does_not_receive() {
 async fn clock_sync_establishes_quickly() {
     let port = start_test_hub().await;
 
-    let hub = Hub::connect(port, "clock-test", vec![])
+    let hub = Hub::connect(port, "clock-test")
         .await
         .unwrap();
 
@@ -382,12 +463,13 @@ async fn clock_sync_establishes_quickly() {
 async fn scheduled_action_delivered_after_delay() {
     let port = start_test_hub().await;
 
-    let hub_sender = Hub::connect(port, "scheduler", vec![])
+    let hub_sender = Hub::connect(port, "scheduler")
         .await
         .unwrap();
-    let mut hub_receiver = Hub::connect(port, "listener", vec!["/scheduled".into()])
+    let mut hub_receiver = Hub::connect(port, "listener")
         .await
         .unwrap();
+    hub_receiver.subscribe("/scheduled").await.unwrap();
 
     // Wait for clock sync.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -397,17 +479,17 @@ async fn scheduled_action_delivered_after_delay() {
     let before_send = Instant::now();
 
     hub_sender
-        .send_action(Action {
-            address: "/scheduled".into(),
-            signal_type: SignalType::Event,
-            timestamp: future_time,
-            payload: Value::String("delayed".into()),
-        })
+        .send_action(action(
+            "/scheduled",
+            SignalType::Event,
+            future_time,
+            Value::String("delayed".into()),
+        ))
         .await
         .unwrap();
 
     // Should receive it, but not immediately — should take ~500ms.
-    let (_, action) = tokio::time::timeout(
+    let action_msg = tokio::time::timeout(
         std::time::Duration::from_secs(3),
         hub_receiver.recv_action(),
     )
@@ -415,8 +497,11 @@ async fn scheduled_action_delivered_after_delay() {
     .expect("Timed out waiting for scheduled action")
     .expect("Channel closed");
 
+    let map = payload_map(&action_msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+
     let elapsed = before_send.elapsed();
-    assert_eq!(action.address, "/scheduled");
+    assert_eq!(address, "/scheduled");
     // Should have taken at least 400ms (allowing some slack).
     assert!(
         elapsed.as_millis() >= 400,
@@ -431,7 +516,7 @@ async fn scheduled_action_delivered_after_delay() {
 async fn param_state_replayed_to_late_joiner() {
     let port = start_test_hub().await;
 
-    let hub_setter = Hub::connect(port, "setter", vec![])
+    let hub_setter = Hub::connect(port, "setter")
         .await
         .unwrap();
 
@@ -439,12 +524,12 @@ async fn param_state_replayed_to_late_joiner() {
 
     // Set a param value before the listener connects.
     hub_setter
-        .send_action(Action {
-            address: "/synth/cutoff".into(),
-            signal_type: SignalType::Param,
-            timestamp: 0.0,
-            payload: Value::Float(FloatValue::new(0.7)),
-        })
+        .send_action(action(
+            "/synth/cutoff",
+            SignalType::Param,
+            0.0,
+            Value::Float(FloatValue::new(0.7)),
+        ))
         .await
         .unwrap();
 
@@ -452,12 +537,13 @@ async fn param_state_replayed_to_late_joiner() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Now a late joiner connects and subscribes to /synth/*.
-    let mut hub_late = Hub::connect(port, "late-joiner", vec!["/synth/*".into()])
+    let mut hub_late = Hub::connect(port, "late-joiner")
         .await
         .unwrap();
+    hub_late.subscribe("/synth/*").await.unwrap();
 
     // The late joiner should receive the current param state.
-    let (_, action) = tokio::time::timeout(
+    let action_msg = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         hub_late.recv_action(),
     )
@@ -465,9 +551,16 @@ async fn param_state_replayed_to_late_joiner() {
     .expect("Timed out waiting for param replay")
     .expect("Channel closed");
 
-    assert_eq!(action.address, "/synth/cutoff");
-    assert_eq!(action.signal_type, SignalType::Param);
-    assert_eq!(action.payload, Value::Float(FloatValue::new(0.7)));
+    let map = payload_map(&action_msg);
+    let address = get_string(&map, "address").unwrap_or_default();
+    let signal_type = get_string(&map, "signal_type")
+        .and_then(|s| parse_signal_type(&s))
+        .unwrap_or(SignalType::Event);
+    let payload = get_value(&map, "payload").unwrap_or(Value::Null);
+
+    assert_eq!(address, "/synth/cutoff");
+    assert_eq!(signal_type, SignalType::Param);
+    assert_eq!(payload, Value::Float(FloatValue::new(0.7)));
 
     hub_setter.disconnect().await;
     hub_late.disconnect().await;
