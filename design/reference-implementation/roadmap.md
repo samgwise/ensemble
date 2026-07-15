@@ -72,7 +72,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 5. Manifest — commit: 4ced5b3
 - [x] 6. Scheduling — commit: 12c7b7f
 - [x] 7. Observability and hub events — commit: 4aa6720
-- [x] 8. Hub / TUI split — commit: 6b372b5
+- [x] 8. Hub / TUI split — commit: 4530379
 - [ ] 9. Conformance harness — commit: _
 
 6. Increments
