@@ -73,7 +73,8 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 6. Scheduling — commit: 12c7b7f
 - [x] 7. Observability and hub events — commit: 4aa6720
 - [x] 8. Hub / TUI split — commit: 4530379
-- [ ] 9. Conformance harness — commit: _
+- [x] 9. Conformance harness — commit: 146ab03
+- [ ] 10. Local hub discovery — commit: _
 
 6. Increments
 
@@ -193,6 +194,28 @@ Acceptance criteria:
 - `cargo test -p ensemble-conformance` runs every suite against the reference implementation.
 - Fixtures are human-readable, language-neutral, and version-controlled.
 - An individual suite runs via `cargo test -p ensemble-conformance <suite>`.
+Status: Complete.
+
+### 6.10 Local hub discovery
+Goal: implement the fallback-first discovery strategy per `design/local-discovery.md`.
+Crates: modify `ensemble-hub`, `ensemble-hub-tui`, `ensemble-client`, `ensemble-bridge-midi`.
+Spec reference: `design/local-discovery.md`.
+Test-first plan:
+- Write tests for port file creation on hub startup (correct platform path, correct content).
+- Write tests for port file deletion on graceful shutdown.
+- Write tests for stale port file detection (hub overwrites if port not bound).
+- Write tests for client discovery: read port file → connect; missing file → default port.
+- Write tests for override priority: CLI > env var > config file > port file > default.
+- Implement port file writing in `ensemble-hub` and `ensemble-hub-tui` after successful bind.
+- Implement port file reading in `ensemble-client` `Hub::connect()`.
+- Add `--port` CLI argument to hub binaries.
+- Add port file fallback to `ensemble-bridge-midi`.
+Acceptance criteria:
+- Hub writes port file on startup, deletes on shutdown.
+- Client reads port file before falling back to default port.
+- Override priority is correct: CLI > env var > default.
+- Stale port files from crashed hubs are handled gracefully.
+- `cargo test -p ensemble-hub` and `cargo test -p ensemble-client` pass.
 Status: Not started. Depends on all prior increments.
 
 7. Ordering Rationale

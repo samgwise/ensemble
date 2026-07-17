@@ -273,6 +273,18 @@ Generates:
 
 /hub/action/dropped
 
+Local Discovery
+
+The hub implements a fallback-first discovery strategy per `design/local-discovery.md`:
+
+- Writes a port file to a platform-specific location after successful binding
+- Deletes the port file on graceful shutdown
+- Handles stale port files from crashed hubs
+- Supports override via CLI argument, environment variable (`ENSEMBLE_HUB_PORT`), or configuration file
+- Default port: `7331`
+
+Clients read the port file before falling back to the default port.
+
 6. TUI Goals
 
 The TUI is a first-class component.
@@ -549,10 +561,12 @@ GUI
 Authentication
 Persistence
 Cluster Support
-Global Discovery
+Global Discovery (network-wide mDNS/Bonjour)
 Web Dashboard
 Plugin System
 
+
+Note: Local hub discovery (port file mechanism) IS supported in v0.1. Only global/network-wide discovery is deferred.
 
 These may be future projects.
 
@@ -561,7 +575,7 @@ These may be future projects.
 A successful v0.1 implementation allows a user to:
 
 Start a hub.
-Connect multiple voices.
+Connect multiple voices (with automatic port discovery or explicit port specification).
 Observe all actions in real time.
 Inspect manifests and capabilities.
 Inspect Param state.
