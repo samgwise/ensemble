@@ -1,0 +1,19 @@
+[package]
+name = "ensemble-demo-euclidean"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Euclidean rhythm generator demo for Ensemble"
+
+[[bin]]
+name = "ensemble-demo-euclidean"
+path = "src/main.rs"
+
+[dependencies]
+ensemble-client = { path = "../ensemble-client" }
+ensemble-core = { path = "../ensemble-core" }
+ensemble-discovery = { path = "../ensemble-discovery" }
+tokio = { version = "1", features = ["full"] }
+ratatui = "0.29"
+crossterm = "0.28"
+anyhow = "1"

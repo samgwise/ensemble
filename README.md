@@ -195,6 +195,8 @@ MessagePack was chosen for cross-language support — native implementations exi
 | `ensemble-bridge-midi` | Binary | MIDI I/O bridge |
 | `ensemble-test-fixtures` | Library | YAML conformance test fixtures |
 | `ensemble-conformance` | Test | Conformance test harness |
+| `ensemble-demo-euclidean` | Binary | Euclidean rhythm generator demo |
+| `ensemble-demo-pitch-cycler` | Binary | Pitch pattern cycler demo |
 
 ## Hub TUI
 
@@ -254,6 +256,44 @@ let hub = Hub::connect(7331, "my-tool").await?;
 ```
 
 See [design/local-discovery.md](design/local-discovery.md) for the full specification.
+
+## Demo Applications
+
+Two demonstration voices showcase Ensemble's scheduling, param, and event systems working together:
+
+### Euclidean Rhythm Generator
+
+Generates Euclidean rhythms (Björklund's algorithm) and publishes trigger events. Control BPM, steps, hits, and rotation in real-time via the TUI.
+
+```sh
+cargo run --bin ensemble-demo-euclidean
+```
+
+### Pitch Pattern Cycler
+
+Subscribes to trigger events and cycles through a pitch pattern, sending MIDI notes to the bridge. Edit the pattern, channel, velocity, and duration via the TUI.
+
+```sh
+cargo run --bin ensemble-demo-pitch-cycler
+```
+
+### Full Demo Chain
+
+Run all four components to hear a Euclidean rhythm played on MIDI:
+
+```sh
+# Terminal 1: Start the hub
+cargo run --bin ensemble-hub-tui
+
+# Terminal 2: Start the MIDI bridge
+cargo run --bin ensemble-bridge-midi -- --output 0
+
+# Terminal 3: Start the Euclidean generator
+cargo run --bin ensemble-demo-euclidean
+
+# Terminal 4: Start the pitch cycler
+cargo run --bin ensemble-demo-pitch-cycler
+```
 
 ## Configuration
 

@@ -2,11 +2,15 @@
 
 All notable changes to the Ensemble reference implementation.
 
-## [Unreleased] — Documentation Update
+## [Unreleased] — Demo Applications & Discovery Crate
 
-- Updated README.md with current API examples and complete crate listing
-- Updated design/pending-questions.md with resolved items
-- Created CHANGELOG.md
+- Extracted `ensemble-discovery` into a standalone crate with zero external dependencies
+- Added `set_port_file_path()` runtime override for port file location
+- Updated all crates to depend on `ensemble-discovery` directly
+- Created `ensemble-demo-euclidean` crate with TUI for Euclidean rhythm generation
+- Created `ensemble-demo-pitch-cycler` crate with TUI for pitch pattern cycling
+- Updated README.md with demo section and crate listing
+- Added README.md files for both demo crates
 
 ## Increment 9: Conformance Harness — `146ab03`
 

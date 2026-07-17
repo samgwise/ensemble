@@ -272,6 +272,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "ensemble-demo-euclidean"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "ensemble-client",
+ "ensemble-core",
+ "ensemble-discovery",
+ "ratatui",
+ "tokio",
+]
+
+[[package]]
+name = "ensemble-demo-pitch-cycler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "ensemble-client",
+ "ensemble-core",
+ "ensemble-discovery",
+ "ratatui",
+ "tokio",
+]
+
+[[package]]
 name = "ensemble-discovery"
 version = "0.1.0"
 

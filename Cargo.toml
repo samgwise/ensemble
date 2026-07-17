@@ -13,6 +13,8 @@ members = [
     "ensemble-bridge-midi",
     "ensemble-test-fixtures",
     "ensemble-conformance",
+    "ensemble-demo-euclidean",
+    "ensemble-demo-pitch-cycler",
 ]
 resolver = "2"
 
