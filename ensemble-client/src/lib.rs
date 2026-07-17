@@ -280,28 +280,28 @@ impl Hub {
         })
     }
 
-    /// Connect to an Ensemble hub using local discovery.
+    /// Connect to the hub using automatic port discovery.
     ///
-    /// Discovery order:
-    /// 1. Read the port file written by the hub (via `ensemble_core::discovery`).
-    /// 2. If the port file exists and a connection succeeds, return immediately.
-    /// 3. If the port file is missing or the connection fails, fall back to the
-    ///    default port (7331).
-    ///
-    /// This method is additive — the existing [`Hub::connect`] remains available
-    /// for callers that know the exact port.
+    /// Discovery order: port file (written by the hub at startup) → default
+    /// port 7331. If the port file exists but the connection fails (e.g. stale
+    /// file), the default port is tried as a fallback.
     pub async fn connect_with_discovery(
         name: &str,
     ) -> Result<Self, CodecError> {
         // Try the port file first.
         if let Some(port) = discovery::read_port_file() {
-            if let Ok(hub) = Hub::connect(port, name).await {
-                return Ok(hub);
+            if discovery::is_port_bound(port) {
+                match Self::connect(port, name).await {
+                    Ok(hub) => return Ok(hub),
+                    Err(_) => {
+                        // Port file was stale — fall through to default.
+                    }
+                }
             }
         }
 
-        // Fall back to the default port.
-        Hub::connect(DEFAULT_HUB_PORT, name).await
+        // Fallback to the well-known default port.
+        Self::connect(DEFAULT_HUB_PORT, name).await
     }
 
     /// Send an action to the hub for routing.

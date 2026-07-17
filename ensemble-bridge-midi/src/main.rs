@@ -21,8 +21,6 @@ use key_state::{KeyStateStore, MidiBytes};
 use midir::{MidiInput, MidiOutput};
 use tokio::sync::{mpsc, Mutex};
 
-const DEFAULT_PORT: u16 = 7331;
-
 // ---------------------------------------------------------------------------
 // MIDI output handling
 // ---------------------------------------------------------------------------
@@ -332,11 +330,12 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let hub_port: u16 = args
+    // When --hub <port> is given, connect explicitly to that port.
+    // Otherwise, use automatic port discovery via the hub's port file.
+    let explicit_port: Option<u16> = args
         .windows(2)
         .find(|w| w[0] == "--hub")
-        .and_then(|w| w[1].parse().ok())
-        .unwrap_or(DEFAULT_PORT);
+        .and_then(|w| w[1].parse().ok());
 
     let output_index: Option<usize> = args
         .windows(2)
@@ -363,14 +362,21 @@ async fn main() -> anyhow::Result<()> {
     let conn_out = midi_out.connect(out_port, "ensemble-bridge-midi")?;
     let midi_tx = spawn_midi_output(conn_out);
 
-    // Connect to hub.
-    let hub = Hub::connect(
-        hub_port,
-        "midi-bridge",
-    )
-    .await?;
+    // Connect to hub — use discovery when no explicit port is given.
+    let (hub, hub_port) = if let Some(port) = explicit_port {
+        let h = Hub::connect(port, "midi-bridge").await?;
+        (h, port)
+    } else {
+        let h = Hub::connect_with_discovery("midi-bridge").await?;
+        eprintln!("Hub discovered via port file");
+        (h, 0u16) // port unknown when using discovery
+    };
     hub.subscribe("/midi/*").await?;
-    eprintln!("Connected to hub on port {hub_port} as voice #{}", hub.voice_id);
+    if explicit_port.is_some() {
+        eprintln!("Connected to hub on port {hub_port} as voice #{}", hub.voice_id);
+    } else {
+        eprintln!("Connected to hub as voice #{}", hub.voice_id);
+    }
 
     // Optionally open MIDI input.
     if let Some(in_idx) = input_index {
