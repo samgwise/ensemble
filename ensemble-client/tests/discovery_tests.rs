@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ensemble_core::codec;
-use ensemble_core::discovery;
+use ensemble_discovery as discovery;
 use ensemble_core::protocol::*;
 use ensemble_routing::{matches_any, Pattern};
 use tokio::io::{BufReader, BufWriter};

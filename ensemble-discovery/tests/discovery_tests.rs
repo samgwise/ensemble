@@ -4,7 +4,7 @@
 //! environment variables are process-global state and Rust tests run in parallel
 //! by default.
 
-use ensemble_core::discovery;
+use ensemble_discovery as discovery;
 use std::env;
 use std::fs;
 use std::net::TcpListener;

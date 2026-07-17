@@ -6,6 +6,7 @@ members = [
     "ensemble-protocol",
     "ensemble-manifest",
     "ensemble-clock",
+    "ensemble-discovery",
     "ensemble-hub",
     "ensemble-hub-tui",
     "ensemble-client",

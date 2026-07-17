@@ -216,6 +216,7 @@ dependencies = [
  "anyhow",
  "ensemble-client",
  "ensemble-core",
+ "ensemble-discovery",
  "midir",
  "tokio",
 ]
@@ -226,6 +227,7 @@ version = "0.1.0"
 dependencies = [
  "ensemble-clock",
  "ensemble-core",
+ "ensemble-discovery",
  "ensemble-routing",
  "tokio",
  "tracing",
@@ -259,6 +261,7 @@ name = "ensemble-core"
 version = "0.1.0"
 dependencies = [
  "ensemble-clock",
+ "ensemble-discovery",
  "ensemble-manifest",
  "ensemble-protocol",
  "ensemble-values",
@@ -269,11 +272,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ensemble-discovery"
+version = "0.1.0"
+
+[[package]]
 name = "ensemble-hub"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ensemble-core",
+ "ensemble-discovery",
  "ensemble-routing",
  "tokio",
 ]
@@ -285,6 +293,7 @@ dependencies = [
  "anyhow",
  "crossterm",
  "ensemble-core",
+ "ensemble-discovery",
  "ensemble-hub",
  "ensemble-routing",
  "ratatui",

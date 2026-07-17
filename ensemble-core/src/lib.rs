@@ -13,8 +13,10 @@
 //! For routing and pattern matching, see the `ensemble-routing` crate.
 
 pub mod codec;
-pub mod discovery;
 pub mod protocol;
+
+// Re-export discovery for backward compatibility
+pub use ensemble_discovery as discovery;
 
 pub use codec::{read_message, write_message, CodecError};
 pub use ensemble_clock::ClockSync;

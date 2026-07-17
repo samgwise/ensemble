@@ -1,0 +1,9 @@
+[package]
+name = "ensemble-discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local hub discovery for Ensemble — port file utilities"
+
+[dependencies]
+# No external dependencies — std only

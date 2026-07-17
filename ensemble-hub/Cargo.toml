@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ensemble-core = { path = "../ensemble-core" }
+ensemble-discovery = { path = "../ensemble-discovery" }
 ensemble-routing = { path = "../ensemble-routing" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"

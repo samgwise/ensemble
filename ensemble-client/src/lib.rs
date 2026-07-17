@@ -56,7 +56,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ensemble_clock::ClockSync;
-use ensemble_core::discovery;
+use ensemble_discovery as discovery;
 use ensemble_core::protocol::*;
 use ensemble_core::{codec, CodecError};
 use tokio::io::{BufReader, BufWriter};

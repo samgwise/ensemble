@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use ensemble_core::discovery::{
+use ensemble_discovery::{
     delete_port_file, is_port_bound, read_port_file, write_port_file,
 };
 use ensemble_hub::start_server;

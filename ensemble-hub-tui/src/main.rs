@@ -18,7 +18,7 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use ensemble_core::discovery::{delete_port_file, is_port_bound, read_port_file, write_port_file};
+use ensemble_discovery::{delete_port_file, is_port_bound, read_port_file, write_port_file};
 use ensemble_core::protocol::*;
 use ensemble_hub::{start_server, HubState, ParamInfo, SharedState};
 use ensemble_routing::Pattern;

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 ensemble-hub = { path = "../ensemble-hub" }
 ensemble-core = { path = "../ensemble-core" }
+ensemble-discovery = { path = "../ensemble-discovery" }
 ensemble-routing = { path = "../ensemble-routing" }
 tokio = { version = "1", features = ["full"] }
 ratatui = "0.29"
