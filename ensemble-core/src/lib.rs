@@ -13,6 +13,7 @@
 //! For routing and pattern matching, see the `ensemble-routing` crate.
 
 pub mod codec;
+pub mod discovery;
 pub mod protocol;
 
 pub use codec::{read_message, write_message, CodecError};
