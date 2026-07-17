@@ -2,6 +2,13 @@
 //!
 //! These tests verify that `Hub::connect_with_discovery()` correctly reads the
 //! port file, falls back to the default port, and handles stale port files.
+//!
+//! **Important**: These tests must be run with `--test-threads=1` because they
+//! use `std::env::set_var` to override the port file path, which is process-global
+//! state and not thread-safe. Running tests in parallel causes race conditions on
+//! the environment variable.
+//!
+//! Example: `cargo test -p ensemble-client --test discovery_tests -- --test-threads=1`
 
 use std::collections::HashMap;
 use std::sync::Arc;

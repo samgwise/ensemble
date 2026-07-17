@@ -1,7 +1,11 @@
 //! Integration tests for hub discovery — port file lifecycle.
 //!
-//! Each test uses a unique `ENSEMBLE_HUB_PORT_FILE` path so that parallel test
-//! execution does not cause interference.
+//! **Important**: These tests must be run with `--test-threads=1` because they
+//! use `std::env::set_var` to override the port file path, which is process-global
+//! state and not thread-safe. Running tests in parallel causes race conditions on
+//! the environment variable.
+//!
+//! Example: `cargo test -p ensemble-hub --test discovery_integration -- --test-threads=1`
 
 use std::fs;
 
