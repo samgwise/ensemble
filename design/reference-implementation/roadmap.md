@@ -74,7 +74,7 @@ Update this section as work proceeds. Mark each increment `[x]` when its accepta
 - [x] 7. Observability and hub events — commit: 4aa6720
 - [x] 8. Hub / TUI split — commit: 4530379
 - [x] 9. Conformance harness — commit: 146ab03
-- [ ] 10. Local hub discovery — commit: _
+- [x] 10. Local hub discovery — commit: 2f44859
 
 6. Increments
 
@@ -216,7 +216,7 @@ Acceptance criteria:
 - Override priority is correct: CLI > env var > default.
 - Stale port files from crashed hubs are handled gracefully.
 - `cargo test -p ensemble-hub` and `cargo test -p ensemble-client` pass.
-Status: Not started. Depends on all prior increments.
+Status: Complete.
 
 7. Ordering Rationale
 
