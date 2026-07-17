@@ -383,20 +383,13 @@ async fn main() -> anyhow::Result<()> {
         let (msg_tx, mut msg_rx) = mpsc::channel::<WireMessage>(256);
         spawn_midi_input(in_idx, msg_tx)?;
 
-        // Forward MIDI input actions to the hub.
-        // We need a clone of the hub's send capability.
+        // Get a sender handle for forwarding MIDI input to the hub.
+        let hub_sender = hub.sender();
         let hub_for_input = hub.voice_id;
-        // We can't clone Hub, so we'll use a channel to forward.
-        // Actually, Hub::send_action takes &self, so we can share via Arc.
-        // But Hub has a non-Send mpsc::Receiver. Instead, spawn a forwarder.
-        // For simplicity, we'll use the hub reference directly in the router
-        // and spawn the input forwarder here.
+        
+        // Forward MIDI input actions to the hub.
         tokio::spawn(async move {
             while let Some(msg) = msg_rx.recv().await {
-                // We can't send from here without the Hub. This is a known
-                // limitation — the Hub struct owns recv. For v0.2, MIDI input
-                // actions are logged. Full bidirectional support needs Hub
-                // to expose a send-only handle.
                 let map = match &msg.payload {
                     Value::Map(m) => m.clone(),
                     _ => continue,
@@ -406,6 +399,12 @@ async fn main() -> anyhow::Result<()> {
                     "MIDI input (voice {hub_for_input}): {} {:?}",
                     address, msg.payload
                 );
+                
+                // Forward the MIDI input action to the hub.
+                if let Err(e) = hub_sender.send(msg).await {
+                    eprintln!("Failed to send MIDI input to hub: {}", e);
+                    break;
+                }
             }
         });
     }
