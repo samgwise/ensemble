@@ -56,11 +56,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ensemble_clock::ClockSync;
+use ensemble_core::discovery;
 use ensemble_core::protocol::*;
 use ensemble_core::{codec, CodecError};
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
+
+/// Default hub port used when discovery cannot locate a running hub.
+const DEFAULT_HUB_PORT: u16 = 7331;
 
 /// Local clock wrapper that pairs a monotonic origin with a ClockSync tracker.
 struct LocalClock {
@@ -274,6 +278,30 @@ impl Hub {
             writer_handle: Some(writer_handle),
             clock_handle: Some(clock_handle),
         })
+    }
+
+    /// Connect to an Ensemble hub using local discovery.
+    ///
+    /// Discovery order:
+    /// 1. Read the port file written by the hub (via `ensemble_core::discovery`).
+    /// 2. If the port file exists and a connection succeeds, return immediately.
+    /// 3. If the port file is missing or the connection fails, fall back to the
+    ///    default port (7331).
+    ///
+    /// This method is additive — the existing [`Hub::connect`] remains available
+    /// for callers that know the exact port.
+    pub async fn connect_with_discovery(
+        name: &str,
+    ) -> Result<Self, CodecError> {
+        // Try the port file first.
+        if let Some(port) = discovery::read_port_file() {
+            if let Ok(hub) = Hub::connect(port, name).await {
+                return Ok(hub);
+            }
+        }
+
+        // Fall back to the default port.
+        Hub::connect(DEFAULT_HUB_PORT, name).await
     }
 
     /// Send an action to the hub for routing.
