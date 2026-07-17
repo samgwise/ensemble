@@ -229,9 +229,35 @@ The test suite covers:
 
 Test fixtures are stored as language-neutral YAML files in `ensemble-test-fixtures/fixtures/`, making it easy to port the conformance suite to other implementations.
 
+## Local Hub Discovery
+
+Clients can discover a running hub automatically without specifying a port. The hub writes a **port file** to a platform-specific location after binding, and clients read it before falling back to the default port.
+
+**Discovery order:** port file → default port (`7331`)
+
+**Port file locations:**
+
+| Platform | Path |
+|----------|------|
+| Linux | `$XDG_RUNTIME_DIR/ensemble/hub.port` |
+| macOS | `$TMPDIR/ensemble-hub.port` |
+| Windows | `%LOCALAPPDATA%\Ensemble\hub.port` |
+
+**Override priority** (hub port selection): `--port` CLI arg > `ENSEMBLE_HUB_PORT` env var > default `7331`
+
+```rust
+// Client-side: automatic discovery
+let hub = Hub::connect_with_discovery("my-tool").await?;
+
+// Client-side: explicit port (bypasses discovery)
+let hub = Hub::connect(7331, "my-tool").await?;
+```
+
+See [design/local-discovery.md](design/local-discovery.md) for the full specification.
+
 ## Configuration
 
-The hub defaults to port `7331`. Override with `ENSEMBLE_HUB_PORT` env var or `--headless` for CI/testing.
+The hub defaults to port `7331`. Override with `--port` CLI argument or `ENSEMBLE_HUB_PORT` environment variable.
 
 The MIDI bridge accepts `--output N`, `--input N`, `--hub PORT`, and `--list`.
 
