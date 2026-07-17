@@ -56,6 +56,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ensemble_clock::ClockSync;
+use ensemble_core::discovery;
 use ensemble_core::protocol::*;
 use ensemble_core::{codec, CodecError};
 use tokio::io::{BufReader, BufWriter};
@@ -274,6 +275,32 @@ impl Hub {
             writer_handle: Some(writer_handle),
             clock_handle: Some(clock_handle),
         })
+    }
+
+    /// Connect to the hub using automatic port discovery.
+    ///
+    /// Discovery order: port file (written by the hub at startup) → default
+    /// port 7331. If the port file exists but the connection fails (e.g. stale
+    /// file), the default port is tried as a fallback.
+    pub async fn connect_with_discovery(
+        name: &str,
+    ) -> Result<Self, CodecError> {
+        const DEFAULT_PORT: u16 = 7331;
+
+        // Try the port file first.
+        if let Some(port) = discovery::read_port_file() {
+            if discovery::is_port_bound(port) {
+                match Self::connect(port, name).await {
+                    Ok(hub) => return Ok(hub),
+                    Err(_) => {
+                        // Port file was stale — fall through to default.
+                    }
+                }
+            }
+        }
+
+        // Fallback to the well-known default port.
+        Self::connect(DEFAULT_PORT, name).await
     }
 
     /// Send an action to the hub for routing.

@@ -2,6 +2,12 @@
 
 Translates between Ensemble actions and MIDI I/O. Connects to the hub as a bridge voice, subscribes to `/midi/*`, and converts incoming Ensemble actions into MIDI output messages. Optionally listens on a MIDI input port and publishes incoming MIDI as Ensemble actions.
 
+## Hub connection
+
+By default the bridge uses **automatic port discovery** to locate the hub. The hub writes its bound TCP port to a platform-specific port file at startup, and the bridge reads this file to determine where to connect. This means you can start the bridge without knowing the hub's port.
+
+If the hub is running on a non-default port or the port file is unavailable, you can specify the port explicitly with `--hub <port>`.
+
 ## Prerequisites
 
 - A running Ensemble hub (`ensemble-hub` or `ensemble-hub-tui`)
@@ -18,7 +24,7 @@ cargo build --bin ensemble-bridge-midi
 ## Usage
 
 ```bash
-# Run with defaults (output port 0, hub port 7331)
+# Run with defaults (output port 0, auto-discover hub)
 cargo run --bin ensemble-bridge-midi
 
 # Specify MIDI output and input port indices
@@ -27,7 +33,7 @@ cargo run --bin ensemble-bridge-midi -- --output 1 --input 0
 # List available MIDI ports and exit
 cargo run --bin ensemble-bridge-midi -- --list
 
-# Connect to a hub running on a non-default port
+# Connect to a hub on an explicit port (bypasses discovery)
 cargo run --bin ensemble-bridge-midi -- --hub 8000 --output 2
 ```
 
@@ -37,7 +43,7 @@ cargo run --bin ensemble-bridge-midi -- --hub 8000 --output 2
 |---|---|---|
 | `--output <index>` | `0` | MIDI output port index (from `--list`) |
 | `--input <index>` | *(none)* | MIDI input port index; if omitted, no input listener is started |
-| `--hub <port>` | `7331` | TCP port of the Ensemble hub to connect to |
+| `--hub <port>` | *(auto)* | TCP port of the Ensemble hub; if omitted, the hub is discovered automatically via its port file |
 | `--list` | — | Print all available MIDI input and output ports, then exit |
 
 ## Ensemble action protocol
