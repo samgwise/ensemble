@@ -1,0 +1,19 @@
+[package]
+name = "ensemble-bridge-osc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OSC bridge for Ensemble — translates between Ensemble actions and OSC/UDP"
+
+[[bin]]
+name = "ensemble-bridge-osc"
+path = "src/main.rs"
+
+[dependencies]
+ensemble-client = { path = "../ensemble-client" }
+ensemble-core = { path = "../ensemble-core" }
+ensemble-discovery = { path = "../ensemble-discovery" }
+tokio = { version = "1", features = ["full"] }
+rosc = "0.11"
+anyhow = "1"
+serde_json = "1"

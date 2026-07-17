@@ -193,6 +193,7 @@ MessagePack was chosen for cross-language support — native implementations exi
 | `ensemble-hub-tui` | Binary | Hub TUI with voice browser, action monitor, param inspector |
 | `ensemble-client` | Library | Client library for building tools |
 | `ensemble-bridge-midi` | Binary | MIDI I/O bridge |
+| `ensemble-bridge-osc` | Binary | OSC/UDP I/O bridge |
 | `ensemble-test-fixtures` | Library | YAML conformance test fixtures |
 | `ensemble-conformance` | Test | Conformance test harness |
 | `ensemble-demo-euclidean` | Binary | Euclidean rhythm generator demo |
@@ -294,6 +295,30 @@ cargo run --bin ensemble-demo-euclidean
 # Terminal 4: Start the pitch cycler
 cargo run --bin ensemble-demo-pitch-cycler
 ```
+
+### OSC Bridge
+
+Translates between Ensemble actions and OSC/UDP. Connects to the hub as a voice, forwards actions under a configurable Ensemble prefix as OSC messages, and publishes received OSC messages back as Ensemble actions.
+
+```sh
+# Default: listen on UDP 9001, send to UDP 9000
+cargo run --bin ensemble-bridge-osc
+
+# Custom configuration for SuperCollider
+cargo run --bin ensemble-bridge-osc -- --name sc-bridge --osc-send-port 57120 --osc-listen-port 57121
+```
+
+**CLI options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--name` | `osc-bridge` | Voice name shown in the hub |
+| `--ens-prefix` | `/osc/out` | Ensemble prefix for outbound actions |
+| `--osc-prefix` | (empty) | OSC prefix for address mapping |
+| `--osc-send-host` | `127.0.0.1` | Host to send OSC messages to |
+| `--osc-send-port` | `9000` | Port to send OSC messages to |
+| `--osc-listen-port` | `9001` | UDP port to listen for inbound OSC |
+| `--hub` | (discovery) | Explicit hub port |
 
 ## Configuration
 

@@ -2,8 +2,9 @@
 
 All notable changes to the Ensemble reference implementation.
 
-## [Unreleased] — Demo Applications & Discovery Crate
+## [Unreleased] — OSC Bridge, Demo Applications & Discovery Crate
 
+- Created `ensemble-bridge-osc` crate — bidirectional OSC/UDP bridge with configurable address prefix mapping
 - Extracted `ensemble-discovery` into a standalone crate with zero external dependencies
 - Added `set_port_file_path()` runtime override for port file location
 - Updated all crates to depend on `ensemble-discovery` directly
