@@ -31,11 +31,17 @@ Maps are easier to evolve than positional tuples.
 
 **Decision**: YAML fixtures with language-neutral format.
 
-Implemented in `ensemble-test-fixtures` and `ensemble-conformance`. 14 YAML fixture files covering routing, values, protocol, lifecycle, scheduling, params, and manifests. Fixtures use simple YAML (no anchors, tags, or complex keys) for easy conversion to JSON or parsing by other languages.
+Implemented in `ensemble-test-fixtures` and `ensemble-conformance`. 14 YAML fixture files covering routing, values, protocol, scheduling, params, and manifests. Fixtures use simple YAML (no anchors, tags, or complex keys) for easy conversion to JSON or parsing by other languages.
+
+### 5. Local Hub Discovery — RESOLVED
+
+**Decision**: Fallback-first discovery strategy with platform-appropriate mechanisms.
+
+Documented in `local-discovery.md`. Default port `7331` provides universal fallback. Desktop platforms use port file at platform-specific locations (`$XDG_RUNTIME_DIR/ensemble/hub.port` on Linux, `$TMPDIR/ensemble-hub.port` on macOS, `%LOCALAPPDATA%\Ensemble\hub.port` on Windows). Mobile/embedded platforms use native discovery (Android Services, iOS Bonjour). Multiple override mechanisms supported: CLI argument, environment variable (`ENSEMBLE_HUB_PORT`), configuration file.
 
 ## Remaining Open Questions
 
-### 5. Hub-to-Hub Semantic Policies
+### 6. Hub-to-Hub Semantic Policies
 
 Hub Bridge exists as a concept but is not yet implemented. Open questions:
 
@@ -44,13 +50,13 @@ Hub Bridge exists as a concept but is not yet implemented. Open questions:
 
 This is the largest architectural question remaining. Fortunately it lives in bridge design, not core protocol.
 
-### 6. Capability Taxonomy
+### 7. Capability Taxonomy
 
 The mechanism is settled (`provides` / `expects`) but not conventions. Who defines capability strings like `midi-output` or `midi-input`?
 
 Likely approach: Start with a recommended convention list rather than a formal registry.
 
-### 7. Toolbox Scope
+### 8. Toolbox Scope
 
 Is the Ensemble Toolbox a collection of separate voice processes, or one application hosting multiple utility modules (Mapper, Filter, Scaler, Router, Logger)?
 
@@ -85,6 +91,7 @@ All of the following are settled through the reference implementation:
 ✅ Hub observability (TUI + hub events)
 ✅ Conformance suite (YAML fixtures)
 ✅ Hub / TUI separation
+✅ Local hub discovery (port file + fallback strategy)
 
 ## Looking Forward
 
