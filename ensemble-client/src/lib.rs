@@ -318,6 +318,35 @@ impl Hub {
             .map_err(|_| CodecError::ConnectionClosed)
     }
 
+    /// Get a clone of the internal sender for use in other tasks.
+    ///
+    /// This allows sending actions from tasks that don't have access to the `Hub`
+    /// reference (e.g., when the main task is blocked on `recv_action()`).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use ensemble_client::Hub;
+    /// # async fn example() {
+    /// let hub = Hub::connect(7331, "my-tool").await.unwrap();
+    /// let sender = hub.sender();
+    ///
+    /// // Spawn a task that can send actions without holding &Hub
+    /// tokio::spawn(async move {
+    ///     use ensemble_core::protocol::*;
+    ///     let _ = sender.send(action(
+    ///         "/my-tool/event",
+    ///         SignalType::Event,
+    ///         0.0,
+    ///         Value::Null,
+    ///     )).await;
+    /// });
+    /// # }
+    /// ```
+    pub fn sender(&self) -> mpsc::Sender<WireMessage> {
+        self.tx.clone()
+    }
+
     /// Receive the next action routed to this voice.
     /// Returns `None` if the connection is closed.
     pub async fn recv_action(&mut self) -> Option<WireMessage> {

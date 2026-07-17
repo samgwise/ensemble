@@ -222,9 +222,11 @@ async fn main() -> Result<()> {
     let udp_rx = spawn_udp_listener(config.osc_listen_port)?;
     eprintln!("UDP listener ready on port {}", config.osc_listen_port);
 
+    // Get a sender handle for forwarding inbound OSC messages to the hub.
+    // This allows us to send actions from the inbound task without holding &Hub.
+    let hub_sender = hub.sender();
+
     // Process inbound OSC messages in a separate task.
-    // Note: Hub owns the recv side, so we can't send actions from here in v1.
-    // Full bidirectional support requires Hub to expose a send-only handle.
     let osc_prefix_clone = config.osc_prefix.clone();
     let ens_in_prefix = "/osc/in".to_string();
     tokio::spawn(async move {
@@ -238,9 +240,20 @@ async fn main() -> Result<()> {
                         &osc_prefix_clone,
                         &ens_in_prefix,
                     );
-                    let _value = osc_to_ensemble_value(&received.message.args);
+                    let value = osc_to_ensemble_value(&received.message.args);
                     eprintln!("  ← OSC: {} (from {})", ens_addr, received.src_addr);
-                    // TODO: Send to hub when Hub supports shared sending.
+                    
+                    // Forward the OSC message to the hub as an Ensemble action.
+                    let action_msg = action(
+                        &ens_addr,
+                        SignalType::Event,
+                        0.0, // immediate
+                        value,
+                    );
+                    if let Err(e) = hub_sender.send(action_msg).await {
+                        eprintln!("Failed to send inbound OSC to hub: {}", e);
+                        break;
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
