@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Wire protocol message types for the Ensemble protocol"
+repository.workspace = true
+homepage.workspace = true
 readme = "README.md"
 
 [dependencies]

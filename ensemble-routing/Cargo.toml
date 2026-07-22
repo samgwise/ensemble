@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Pattern matching and address routing for the Ensemble protocol"
+repository.workspace = true
+homepage.workspace = true
 readme = "README.md"
 
 [dependencies]

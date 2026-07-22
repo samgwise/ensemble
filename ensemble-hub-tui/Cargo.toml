@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Ensemble hub with terminal UI — voice browser, action monitor, param inspector"
+repository.workspace = true
+homepage.workspace = true
 readme = "README.md"
 
 [dependencies]

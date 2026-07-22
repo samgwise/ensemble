@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Value model for the Ensemble protocol — 10 types with MessagePack serialization"
+repository.workspace = true
+homepage.workspace = true
 readme = "README.md"
 
 [dependencies]
