@@ -3,6 +3,8 @@ name = "ensemble-values"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Value model for the Ensemble protocol — 10 types with MessagePack serialization"
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

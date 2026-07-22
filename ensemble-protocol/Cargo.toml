@@ -3,8 +3,10 @@ name = "ensemble-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wire protocol message types for the Ensemble protocol"
+readme = "README.md"
 
 [dependencies]
-ensemble-values = { path = "../ensemble-values" }
+ensemble-values = { version = "0.1.0", path = "../ensemble-values" }
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"

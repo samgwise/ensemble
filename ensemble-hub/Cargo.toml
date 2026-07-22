@@ -3,10 +3,12 @@ name = "ensemble-hub"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Headless Ensemble hub — routes actions and provides a reference clock"
+readme = "README.md"
 
 [dependencies]
-ensemble-core = { path = "../ensemble-core" }
-ensemble-discovery = { path = "../ensemble-discovery" }
-ensemble-routing = { path = "../ensemble-routing" }
+ensemble-core = { version = "0.1.0", path = "../ensemble-core" }
+ensemble-discovery = { version = "0.1.0", path = "../ensemble-discovery" }
+ensemble-routing = { version = "0.1.0", path = "../ensemble-routing" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"

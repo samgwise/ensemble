@@ -3,11 +3,13 @@ name = "ensemble-bridge-midi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "MIDI bridge for Ensemble — translates between Ensemble actions and MIDI I/O"
+readme = "README.md"
 
 [dependencies]
-ensemble-core = { path = "../ensemble-core" }
-ensemble-discovery = { path = "../ensemble-discovery" }
-ensemble-client = { path = "../ensemble-client" }
+ensemble-core = { version = "0.1.0", path = "../ensemble-core" }
+ensemble-discovery = { version = "0.1.0", path = "../ensemble-discovery" }
+ensemble-client = { version = "0.1.0", path = "../ensemble-client" }
 tokio = { version = "1", features = ["full"] }
 midir = "0.10"
 anyhow = "1"

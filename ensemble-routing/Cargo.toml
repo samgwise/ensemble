@@ -3,5 +3,7 @@ name = "ensemble-routing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Pattern matching and address routing for the Ensemble protocol"
+readme = "README.md"
 
 [dependencies]

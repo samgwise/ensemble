@@ -3,7 +3,9 @@ name = "ensemble-manifest"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Voice manifest types for the Ensemble protocol"
+readme = "README.md"
 
 [dependencies]
-ensemble-values = { path = "../ensemble-values" }
-ensemble-protocol = { path = "../ensemble-protocol" }
+ensemble-values = { version = "0.1.0", path = "../ensemble-values" }
+ensemble-protocol = { version = "0.1.0", path = "../ensemble-protocol" }

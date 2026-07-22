@@ -3,12 +3,14 @@ name = "ensemble-hub-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Ensemble hub with terminal UI — voice browser, action monitor, param inspector"
+readme = "README.md"
 
 [dependencies]
-ensemble-hub = { path = "../ensemble-hub" }
-ensemble-core = { path = "../ensemble-core" }
-ensemble-discovery = { path = "../ensemble-discovery" }
-ensemble-routing = { path = "../ensemble-routing" }
+ensemble-hub = { version = "0.1.0", path = "../ensemble-hub" }
+ensemble-core = { version = "0.1.0", path = "../ensemble-core" }
+ensemble-discovery = { version = "0.1.0", path = "../ensemble-discovery" }
+ensemble-routing = { version = "0.1.0", path = "../ensemble-routing" }
 tokio = { version = "1", features = ["full"] }
 ratatui = "0.29"
 crossterm = "0.28"

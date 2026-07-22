@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Language-neutral YAML fixtures for Ensemble protocol conformance testing"
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
