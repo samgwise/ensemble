@@ -37,18 +37,6 @@ enum DetailPane {
     RouteTester,
 }
 
-impl DetailPane {
-    fn title(&self) -> &str {
-        match self {
-            DetailPane::Params => "Param Inspector",
-            DetailPane::Schedule => "Scheduling Monitor",
-            DetailPane::Log => "Log Viewer",
-            DetailPane::Manifest => "Manifest Browser",
-            DetailPane::RouteTester => "Route Tester",
-        }
-    }
-}
-
 /// Application state for the TUI.
 struct App {
     /// Index of the selected voice in the Voice Browser.
@@ -328,7 +316,7 @@ fn draw_param_inspector(frame: &mut Frame, app: &App, state: &HubState, area: Re
     let params: Vec<ParamInfo> = state
         .param_state()
         .into_iter()
-        .filter(|p| selected_voice_id.map_or(true, |vid| p.source == vid))
+        .filter(|p| selected_voice_id.is_none_or(|vid| p.source == vid))
         .collect();
 
     let items: Vec<ListItem> = params
@@ -575,10 +563,8 @@ fn handle_input(app: &mut App, key: event::KeyEvent) {
         KeyCode::Down | KeyCode::Char('j') => {
             app.voice_selection += 1;
         }
-        KeyCode::Char('i') => {
-            if app.detail_pane == DetailPane::RouteTester {
-                app.route_input_mode = true;
-            }
+        KeyCode::Char('i') if app.detail_pane == DetailPane::RouteTester => {
+            app.route_input_mode = true;
         }
         _ => {}
     }

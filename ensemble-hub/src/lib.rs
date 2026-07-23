@@ -197,8 +197,8 @@ impl HubState {
     /// Get the scheduled actions.
     pub fn scheduled_actions(&self) -> Vec<ScheduledActionInfo> {
         self.schedule
-            .iter()
-            .flat_map(|(_key, actions)| {
+            .values()
+            .flat_map(|actions| {
                 actions.iter().map(move |sa| {
                     let source_name = self
                         .voices

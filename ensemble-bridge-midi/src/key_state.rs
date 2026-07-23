@@ -34,11 +34,6 @@ impl KeyState {
         self.event_counter
     }
 
-    /// Current mutex counter value.
-    fn current(&self) -> u32 {
-        self.event_counter
-    }
-
     /// Attempt to play. Only succeeds if `event_id` matches the current
     /// counter and the key is not already on.
     fn play(&mut self, event_id: u32, channel: u8, note: u8, velocity: u8) -> Option<MidiBytes> {
@@ -82,11 +77,6 @@ impl KeyStateStore {
     /// Call this when scheduling a new play or cancel.
     pub fn bump(&mut self, channel: u8, note: u8) -> u32 {
         self.key(channel, note).bump()
-    }
-
-    /// Get the current event ID without bumping.
-    pub fn current(&mut self, channel: u8, note: u8) -> u32 {
-        self.key(channel, note).current()
     }
 
     /// Attempt note-on. Returns MIDI bytes if the event ID is still valid.

@@ -10,8 +10,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde_yaml;
-
 // Re-export fixture types for use in test modules.
 pub use ensemble_client::Hub;
 pub use ensemble_core::protocol::*;

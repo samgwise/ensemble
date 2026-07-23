@@ -101,7 +101,7 @@ impl RouteInfo {
 ///
 /// Manifests are advisory — they do not affect routing, enforce type safety,
 /// or create/remove subscriptions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct VoiceManifest {
     /// Human-readable voice name (need not be unique).
     pub name: String,
@@ -117,20 +117,6 @@ pub struct VoiceManifest {
     pub expects: Vec<String>,
     /// Routes exposed by this voice.
     pub routes: Vec<RouteInfo>,
-}
-
-impl Default for VoiceManifest {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            description: None,
-            version: None,
-            tags: Vec::new(),
-            provides: Vec::new(),
-            expects: Vec::new(),
-            routes: Vec::new(),
-        }
-    }
 }
 
 impl VoiceManifest {
