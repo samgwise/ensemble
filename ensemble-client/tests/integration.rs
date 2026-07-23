@@ -85,7 +85,8 @@ impl TestHub {
     fn remove_voice(&mut self, voice_id: VoiceId) -> Option<String> {
         let voice_name = self.voices.remove(&voice_id).map(|v| v.name);
         // Remove param state owned by this voice.
-        self.param_state.retain(|_, (source, _)| *source != voice_id);
+        self.param_state
+            .retain(|_, (source, _)| *source != voice_id);
         // Remove scheduled actions from this voice.
         for actions in self.schedule.values_mut() {
             actions.retain(|sa| sa.source != voice_id);
@@ -255,22 +256,17 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                             // For future params, do NOT write to param_state yet.
                             // Activation-time retention: param becomes current only at its timestamp.
                             let key = timestamp_key(timestamp);
-                            h.schedule
-                                .entry(key)
-                                .or_default()
-                                .push(ScheduledAction {
-                                    source: voice_id,
-                                    message: routed_msg,
-                                    address,
-                                    signal_type,
-                                });
+                            h.schedule.entry(key).or_default().push(ScheduledAction {
+                                source: voice_id,
+                                message: routed_msg,
+                                address,
+                                signal_type,
+                            });
                         } else {
                             // Immediate dispatch: store param state now.
                             if signal_type == SignalType::Param {
-                                h.param_state.insert(
-                                    address.clone(),
-                                    (voice_id, routed_msg.clone()),
-                                );
+                                h.param_state
+                                    .insert(address.clone(), (voice_id, routed_msg.clone()));
                             }
                             route_action(&h, voice_id, &address, &routed_msg).await;
                         }
@@ -287,8 +283,8 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                                 patterns.push(p.clone());
                                 for (_source, action_msg) in h.param_state.values() {
                                     let action_map = payload_map(action_msg);
-                                    let address = get_string(&action_map, "address")
-                                        .unwrap_or_default();
+                                    let address =
+                                        get_string(&action_map, "address").unwrap_or_default();
                                     if matches_any(&patterns, &address) {
                                         replays.push(action_msg.clone());
                                     }
@@ -309,7 +305,11 @@ async fn handle_test_voice(stream: TcpStream, hub: SharedHub) {
                         let pat_str = get_string(&map, "pattern").unwrap_or_default();
                         let mut h = hub.lock().await;
                         if let Some(voice) = h.voices.get_mut(&voice_id) {
-                            if let Some(pos) = voice.subscription_strings.iter().position(|s| s == &pat_str) {
+                            if let Some(pos) = voice
+                                .subscription_strings
+                                .iter()
+                                .position(|s| s == &pat_str)
+                            {
                                 voice.subscription_strings.remove(pos);
                                 voice.subscription_patterns.remove(pos);
                             }
@@ -441,10 +441,8 @@ async fn start_test_hub() -> u16 {
                         for sa in actions {
                             // Activation-time retention: activate param state now.
                             if sa.signal_type == SignalType::Param {
-                                h.param_state.insert(
-                                    sa.address.clone(),
-                                    (sa.source, sa.message.clone()),
-                                );
+                                h.param_state
+                                    .insert(sa.address.clone(), (sa.source, sa.message.clone()));
                             }
                             route_action(&h, sa.source, &sa.address, &sa.message).await;
                         }
@@ -469,15 +467,11 @@ async fn two_voices_exchange_actions() {
     let port = start_test_hub().await;
 
     // Voice A subscribes to /pong, sends /ping.
-    let hub_a = Hub::connect(port, "voice-a")
-        .await
-        .unwrap();
+    let hub_a = Hub::connect(port, "voice-a").await.unwrap();
     hub_a.subscribe("/pong").await.unwrap();
 
     // Voice B subscribes to /ping, sends /pong.
-    let mut hub_b = Hub::connect(port, "voice-b")
-        .await
-        .unwrap();
+    let mut hub_b = Hub::connect(port, "voice-b").await.unwrap();
     hub_b.subscribe("/ping").await.unwrap();
 
     // Allow clock sync to happen.
@@ -495,13 +489,10 @@ async fn two_voices_exchange_actions() {
         .unwrap();
 
     // B should receive it.
-    let action_msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        hub_b.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for action")
-    .expect("Channel closed");
+    let action_msg = tokio::time::timeout(std::time::Duration::from_secs(2), hub_b.recv_action())
+        .await
+        .expect("Timed out waiting for action")
+        .expect("Channel closed");
 
     let map = payload_map(&action_msg);
     let source = get_integer(&map, "source").unwrap_or(0) as VoiceId;
@@ -521,14 +512,10 @@ async fn wildcard_subscription_routes_subtree() {
     let port = start_test_hub().await;
 
     // Voice A subscribes to /synth/** — should receive anything under /synth/.
-    let mut hub_a = Hub::connect(port, "listener")
-        .await
-        .unwrap();
+    let mut hub_a = Hub::connect(port, "listener").await.unwrap();
     hub_a.subscribe("/synth/**").await.unwrap();
 
-    let hub_b = Hub::connect(port, "sender")
-        .await
-        .unwrap();
+    let hub_b = Hub::connect(port, "sender").await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -543,13 +530,10 @@ async fn wildcard_subscription_routes_subtree() {
         .await
         .unwrap();
 
-    let action_msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        hub_a.recv_action(),
-    )
-    .await
-    .expect("Timed out")
-    .expect("Channel closed");
+    let action_msg = tokio::time::timeout(std::time::Duration::from_secs(2), hub_a.recv_action())
+        .await
+        .expect("Timed out")
+        .expect("Channel closed");
 
     let map = payload_map(&action_msg);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -564,35 +548,26 @@ async fn unsubscribed_voice_does_not_receive() {
     let port = start_test_hub().await;
 
     // Voice A subscribes to /other — should NOT receive /ping.
-    let mut hub_a = Hub::connect(port, "bystander")
-        .await
-        .unwrap();
+    let mut hub_a = Hub::connect(port, "bystander").await.unwrap();
     hub_a.subscribe("/other").await.unwrap();
 
-    let hub_b = Hub::connect(port, "sender")
-        .await
-        .unwrap();
+    let hub_b = Hub::connect(port, "sender").await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     hub_b
-        .send_action(action(
-            "/ping",
-            SignalType::Event,
-            0.0,
-            Value::Null,
-        ))
+        .send_action(action("/ping", SignalType::Event, 0.0, Value::Null))
         .await
         .unwrap();
 
     // A should NOT receive anything — use a short timeout.
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(300),
-        hub_a.recv_action(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(300), hub_a.recv_action()).await;
 
-    assert!(result.is_err(), "Should have timed out — voice A shouldn't receive /ping");
+    assert!(
+        result.is_err(),
+        "Should have timed out — voice A shouldn't receive /ping"
+    );
 
     hub_a.disconnect().await;
     hub_b.disconnect().await;
@@ -602,9 +577,7 @@ async fn unsubscribed_voice_does_not_receive() {
 async fn clock_sync_establishes_quickly() {
     let port = start_test_hub().await;
 
-    let hub = Hub::connect(port, "clock-test")
-        .await
-        .unwrap();
+    let hub = Hub::connect(port, "clock-test").await.unwrap();
 
     // Clock sync should establish within 500ms on localhost.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -623,12 +596,8 @@ async fn clock_sync_establishes_quickly() {
 async fn scheduled_action_delivered_after_delay() {
     let port = start_test_hub().await;
 
-    let hub_sender = Hub::connect(port, "scheduler")
-        .await
-        .unwrap();
-    let mut hub_receiver = Hub::connect(port, "listener")
-        .await
-        .unwrap();
+    let hub_sender = Hub::connect(port, "scheduler").await.unwrap();
+    let mut hub_receiver = Hub::connect(port, "listener").await.unwrap();
     hub_receiver.subscribe("/scheduled").await.unwrap();
 
     // Wait for clock sync.
@@ -676,9 +645,7 @@ async fn scheduled_action_delivered_after_delay() {
 async fn param_state_replayed_to_late_joiner() {
     let port = start_test_hub().await;
 
-    let hub_setter = Hub::connect(port, "setter")
-        .await
-        .unwrap();
+    let hub_setter = Hub::connect(port, "setter").await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -697,19 +664,15 @@ async fn param_state_replayed_to_late_joiner() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Now a late joiner connects and subscribes to /synth/*.
-    let mut hub_late = Hub::connect(port, "late-joiner")
-        .await
-        .unwrap();
+    let mut hub_late = Hub::connect(port, "late-joiner").await.unwrap();
     hub_late.subscribe("/synth/*").await.unwrap();
 
     // The late joiner should receive the current param state.
-    let action_msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        hub_late.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for param replay")
-    .expect("Channel closed");
+    let action_msg =
+        tokio::time::timeout(std::time::Duration::from_secs(2), hub_late.recv_action())
+            .await
+            .expect("Timed out waiting for param replay")
+            .expect("Channel closed");
 
     let map = payload_map(&action_msg);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -753,12 +716,8 @@ async fn duplicate_names_accepted() {
 async fn runtime_subscribe_unsubscribe() {
     let port = start_test_hub().await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -776,13 +735,10 @@ async fn runtime_subscribe_unsubscribe() {
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for action after subscribe")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out waiting for action after subscribe")
+        .expect("Channel closed");
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test/foo");
 
@@ -820,9 +776,7 @@ async fn snapshot_then_live_ordering() {
     let port = start_test_hub().await;
 
     // Set a param value before the subscriber connects.
-    let setter = Hub::connect(port, "setter")
-        .await
-        .unwrap();
+    let setter = Hub::connect(port, "setter").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     setter
@@ -837,22 +791,18 @@ async fn snapshot_then_live_ordering() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Connect a subscriber.
-    let mut subscriber = Hub::connect(port, "subscriber")
-        .await
-        .unwrap();
+    let mut subscriber = Hub::connect(port, "subscriber").await.unwrap();
 
     // Subscribe — should trigger param replay.
     subscriber.subscribe("/level").await.unwrap();
 
     // The first message received must be the snapshot (param replay),
     // not a live update.
-    let snapshot = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        subscriber.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for snapshot")
-    .expect("Channel closed");
+    let snapshot =
+        tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv_action())
+            .await
+            .expect("Timed out waiting for snapshot")
+            .expect("Channel closed");
 
     let map = payload_map(&snapshot);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -871,13 +821,10 @@ async fn snapshot_then_live_ordering() {
         .await
         .unwrap();
 
-    let live = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        subscriber.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for live update")
-    .expect("Channel closed");
+    let live = tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv_action())
+        .await
+        .expect("Timed out waiting for live update")
+        .expect("Channel closed");
 
     let map = payload_map(&live);
     let live_payload = get_value(&map, "payload").unwrap_or(Value::Null);
@@ -892,9 +839,7 @@ async fn graceful_disconnect_cleans_up_state() {
     let port = start_test_hub().await;
 
     // Voice A sets a param.
-    let setter = Hub::connect(port, "setter")
-        .await
-        .unwrap();
+    let setter = Hub::connect(port, "setter").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     setter
@@ -914,17 +859,12 @@ async fn graceful_disconnect_cleans_up_state() {
 
     // A late joiner subscribes to /temp — should NOT receive the param
     // because the setter disconnected and its param state should be cleaned up.
-    let mut joiner = Hub::connect(port, "joiner")
-        .await
-        .unwrap();
+    let mut joiner = Hub::connect(port, "joiner").await.unwrap();
     joiner.subscribe("/temp").await.unwrap();
 
     // Should NOT receive any param replay.
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(300),
-        joiner.recv_action(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(300), joiner.recv_action()).await;
     assert!(
         result.is_err(),
         "Should have timed out — disconnected voice's params should be cleaned up"
@@ -939,9 +879,7 @@ async fn ungraceful_disconnect_cleans_up_state() {
 
     // Voice sets a param, then drops without calling disconnect.
     {
-        let setter = Hub::connect(port, "setter")
-            .await
-            .unwrap();
+        let setter = Hub::connect(port, "setter").await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         setter
@@ -963,16 +901,11 @@ async fn ungraceful_disconnect_cleans_up_state() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     // A late joiner subscribes — should NOT receive the param.
-    let mut joiner = Hub::connect(port, "joiner")
-        .await
-        .unwrap();
+    let mut joiner = Hub::connect(port, "joiner").await.unwrap();
     joiner.subscribe("/pressure").await.unwrap();
 
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(300),
-        joiner.recv_action(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(300), joiner.recv_action()).await;
     assert!(
         result.is_err(),
         "Should have timed out — ungraceful disconnect should clean up params"
@@ -985,9 +918,7 @@ async fn ungraceful_disconnect_cleans_up_state() {
 async fn runtime_name_update() {
     let port = start_test_hub().await;
 
-    let hub = Hub::connect(port, "original-name")
-        .await
-        .unwrap();
+    let hub = Hub::connect(port, "original-name").await.unwrap();
 
     // Send an update_name message.
     hub.send_update_name("new-name").await.unwrap();
@@ -997,28 +928,18 @@ async fn runtime_name_update() {
 
     // The hub should have accepted the rename without error.
     // We verify by ensuring the connection is still alive — send an action.
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    hub.send_action(action(
-        "/test",
-        SignalType::Event,
-        0.0,
-        Value::Null,
-    ))
-    .await
-    .unwrap();
+    hub.send_action(action("/test", SignalType::Event, 0.0, Value::Null))
+        .await
+        .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out — connection should still be alive after rename")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out — connection should still be alive after rename")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
@@ -1035,9 +956,7 @@ async fn runtime_name_update() {
 async fn set_manifest_replaces() {
     let port = start_test_hub().await;
 
-    let hub = Hub::connect(port, "manifest-test")
-        .await
-        .unwrap();
+    let hub = Hub::connect(port, "manifest-test").await.unwrap();
 
     // Set a manifest.
     let manifest = VoiceManifest {
@@ -1055,28 +974,18 @@ async fn set_manifest_replaces() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Connection should still be alive — send an action to verify.
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    hub.send_action(action(
-        "/test",
-        SignalType::Event,
-        0.0,
-        Value::Null,
-    ))
-    .await
-    .unwrap();
+    hub.send_action(action("/test", SignalType::Event, 0.0, Value::Null))
+        .await
+        .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out — connection should be alive after set_manifest")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out — connection should be alive after set_manifest")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
@@ -1089,9 +998,7 @@ async fn set_manifest_replaces() {
 async fn patch_manifest_updates_specified_fields() {
     let port = start_test_hub().await;
 
-    let hub = Hub::connect(port, "patch-test")
-        .await
-        .unwrap();
+    let hub = Hub::connect(port, "patch-test").await.unwrap();
 
     // Set an initial manifest.
     let manifest = VoiceManifest {
@@ -1114,34 +1021,27 @@ async fn patch_manifest_updates_specified_fields() {
     );
     patch.insert(
         "tags".into(),
-        Value::List(vec![Value::String("tag2".into()), Value::String("tag3".into())]),
+        Value::List(vec![
+            Value::String("tag2".into()),
+            Value::String("tag3".into()),
+        ]),
     );
     hub.patch_manifest(Value::Map(patch)).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Connection should still be alive.
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    hub.send_action(action(
-        "/test",
-        SignalType::Event,
-        0.0,
-        Value::Null,
-    ))
-    .await
-    .unwrap();
+    hub.send_action(action("/test", SignalType::Event, 0.0, Value::Null))
+        .await
+        .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out — connection should be alive after patch_manifest")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out — connection should be alive after patch_manifest")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
@@ -1154,9 +1054,7 @@ async fn patch_manifest_updates_specified_fields() {
 async fn patch_manifest_without_prior_set() {
     let port = start_test_hub().await;
 
-    let hub = Hub::connect(port, "patch-no-set")
-        .await
-        .unwrap();
+    let hub = Hub::connect(port, "patch-no-set").await.unwrap();
 
     // Patch without a prior set — should create a default manifest and patch it.
     let mut patch = BTreeMap::new();
@@ -1169,28 +1067,18 @@ async fn patch_manifest_without_prior_set() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Connection should still be alive.
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    hub.send_action(action(
-        "/test",
-        SignalType::Event,
-        0.0,
-        Value::Null,
-    ))
-    .await
-    .unwrap();
+    hub.send_action(action("/test", SignalType::Event, 0.0, Value::Null))
+        .await
+        .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out — connection should be alive after patch without prior set")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out — connection should be alive after patch without prior set")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
@@ -1203,12 +1091,8 @@ async fn patch_manifest_without_prior_set() {
 async fn manifest_does_not_affect_routing() {
     let port = start_test_hub().await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
 
     // Set a manifest on the sender.
     let manifest = VoiceManifest {
@@ -1237,13 +1121,10 @@ async fn manifest_does_not_affect_routing() {
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out — manifest should not affect routing")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out — manifest should not affect routing")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test/foo");
@@ -1257,9 +1138,7 @@ async fn manifest_does_not_affect_routing() {
 async fn manifest_survives_runtime_update() {
     let port = start_test_hub().await;
 
-    let hub = Hub::connect(port, "runtime-update")
-        .await
-        .unwrap();
+    let hub = Hub::connect(port, "runtime-update").await.unwrap();
 
     // Set initial manifest.
     let manifest1 = VoiceManifest {
@@ -1275,28 +1154,18 @@ async fn manifest_survives_runtime_update() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Send an action.
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    hub.send_action(action(
-        "/test",
-        SignalType::Event,
-        0.0,
-        Value::Integer(1),
-    ))
-    .await
-    .unwrap();
+    hub.send_action(action("/test", SignalType::Event, 0.0, Value::Integer(1)))
+        .await
+        .unwrap();
 
-    let msg1 = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for first action")
-    .expect("Channel closed");
+    let msg1 = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out waiting for first action")
+        .expect("Channel closed");
     let map1 = payload_map(&msg1);
     assert_eq!(get_integer(&map1, "payload"), Some(1));
 
@@ -1314,22 +1183,14 @@ async fn manifest_survives_runtime_update() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Send another action — connection should still be alive.
-    hub.send_action(action(
-        "/test",
-        SignalType::Event,
-        0.0,
-        Value::Integer(2),
-    ))
-    .await
-    .unwrap();
+    hub.send_action(action("/test", SignalType::Event, 0.0, Value::Integer(2)))
+        .await
+        .unwrap();
 
-    let msg2 = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for second action — manifest update should not disconnect")
-    .expect("Channel closed");
+    let msg2 = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out waiting for second action — manifest update should not disconnect")
+        .expect("Channel closed");
     let map2 = payload_map(&msg2);
     assert_eq!(get_integer(&map2, "payload"), Some(2));
 
@@ -1343,9 +1204,7 @@ async fn manifest_cleaned_up_on_disconnect() {
 
     // Voice sets a manifest, then disconnects.
     {
-        let hub = Hub::connect(port, "manifest-voice")
-            .await
-            .unwrap();
+        let hub = Hub::connect(port, "manifest-voice").await.unwrap();
 
         let manifest = VoiceManifest {
             name: "Temporary".into(),
@@ -1369,32 +1228,20 @@ async fn manifest_cleaned_up_on_disconnect() {
     // A new voice connects — the hub should have cleaned up the manifest.
     // We can't directly inspect the hub state from the client, but we can
     // verify the hub is still functional.
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
     sender
-        .send_action(action(
-            "/test",
-            SignalType::Event,
-            0.0,
-            Value::Null,
-        ))
+        .send_action(action("/test", SignalType::Event, 0.0, Value::Null))
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out — hub should still work after manifest voice disconnected")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out — hub should still work after manifest voice disconnected")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/test");
@@ -1411,34 +1258,22 @@ async fn manifest_cleaned_up_on_disconnect() {
 async fn immediate_dispatch() {
     let port = start_test_hub().await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
 
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Send with timestamp = 0.0 (immediate).
     sender
-        .send_action(action(
-            "/test",
-            SignalType::Event,
-            0.0,
-            Value::Integer(1),
-        ))
+        .send_action(action("/test", SignalType::Event, 0.0, Value::Integer(1)))
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for immediate action")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out waiting for immediate action")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_integer(&map, "payload"), Some(1));
@@ -1451,12 +1286,8 @@ async fn immediate_dispatch() {
 async fn past_timestamp_dispatches_immediately() {
     let port = start_test_hub().await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
 
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1472,13 +1303,10 @@ async fn past_timestamp_dispatches_immediately() {
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for past-timestamp action")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out waiting for past-timestamp action")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_integer(&map, "payload"), Some(2));
@@ -1491,12 +1319,8 @@ async fn past_timestamp_dispatches_immediately() {
 async fn not_before_delivery() {
     let port = start_test_hub().await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
 
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -1515,13 +1339,10 @@ async fn not_before_delivery() {
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for scheduled action")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv_action())
+        .await
+        .expect("Timed out waiting for scheduled action")
+        .expect("Channel closed");
 
     let elapsed = before_send.elapsed();
     let map = payload_map(&msg);
@@ -1541,12 +1362,8 @@ async fn not_before_delivery() {
 async fn per_sender_fifo_ordering() {
     let port = start_test_hub().await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
 
     receiver.subscribe("/test").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1555,25 +1372,17 @@ async fn per_sender_fifo_ordering() {
     let now = sender.now().await;
     for i in 0..3 {
         sender
-            .send_action(action(
-                "/test",
-                SignalType::Event,
-                now,
-                Value::Integer(i),
-            ))
+            .send_action(action("/test", SignalType::Event, now, Value::Integer(i)))
             .await
             .unwrap();
     }
 
     // Receive them — should be in FIFO order.
     for expected in 0..3 {
-        let msg = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            receiver.recv_action(),
-        )
-        .await
-        .expect(&format!("Timed out waiting for action {}", expected))
-        .expect("Channel closed");
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+            .await
+            .expect(&format!("Timed out waiting for action {}", expected))
+            .expect("Channel closed");
 
         let map = payload_map(&msg);
         let payload = get_integer(&map, "payload").unwrap_or(-1);
@@ -1588,9 +1397,7 @@ async fn per_sender_fifo_ordering() {
 async fn activation_time_retention() {
     let port = start_test_hub().await;
 
-    let setter = Hub::connect(port, "setter")
-        .await
-        .unwrap();
+    let setter = Hub::connect(port, "setter").await.unwrap();
 
     // Set an immediate param value.
     setter
@@ -1618,18 +1425,13 @@ async fn activation_time_retention() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // A late joiner should receive the current value (0.5), not the future value (0.8).
-    let mut joiner = Hub::connect(port, "joiner")
-        .await
-        .unwrap();
+    let mut joiner = Hub::connect(port, "joiner").await.unwrap();
     joiner.subscribe("/level").await.unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        joiner.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for param replay")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), joiner.recv_action())
+        .await
+        .expect("Timed out waiting for param replay")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let payload = get_float(&map, "payload").unwrap_or(0.0);
@@ -1643,18 +1445,13 @@ async fn activation_time_retention() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Now a new joiner should receive the activated value (0.8).
-    let mut joiner2 = Hub::connect(port, "joiner2")
-        .await
-        .unwrap();
+    let mut joiner2 = Hub::connect(port, "joiner2").await.unwrap();
     joiner2.subscribe("/level").await.unwrap();
 
-    let msg2 = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        joiner2.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for activated param")
-    .expect("Channel closed");
+    let msg2 = tokio::time::timeout(std::time::Duration::from_secs(2), joiner2.recv_action())
+        .await
+        .expect("Timed out waiting for activated param")
+        .expect("Channel closed");
 
     let map2 = payload_map(&msg2);
     let payload2 = get_float(&map2, "payload").unwrap_or(0.0);
@@ -1673,9 +1470,7 @@ async fn activation_time_retention() {
 async fn snapshot_consistency() {
     let port = start_test_hub().await;
 
-    let setter = Hub::connect(port, "setter")
-        .await
-        .unwrap();
+    let setter = Hub::connect(port, "setter").await.unwrap();
 
     // Set an immediate param value.
     setter
@@ -1703,18 +1498,13 @@ async fn snapshot_consistency() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Subscribe — snapshot should only include the current value (20.0).
-    let mut subscriber = Hub::connect(port, "subscriber")
-        .await
-        .unwrap();
+    let mut subscriber = Hub::connect(port, "subscriber").await.unwrap();
     subscriber.subscribe("/temp").await.unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        subscriber.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for snapshot")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv_action())
+        .await
+        .expect("Timed out waiting for snapshot")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let payload = get_float(&map, "payload").unwrap_or(0.0);
@@ -1747,12 +1537,8 @@ async fn snapshot_consistency() {
 async fn reserved_namespace_rejected() {
     let port = start_test_hub().await;
 
-    let sender = Hub::connect(port, "sender")
-        .await
-        .unwrap();
-    let mut receiver = Hub::connect(port, "receiver")
-        .await
-        .unwrap();
+    let sender = Hub::connect(port, "sender").await.unwrap();
+    let mut receiver = Hub::connect(port, "receiver").await.unwrap();
 
     receiver.subscribe("/hub/**").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1784,22 +1570,14 @@ async fn reserved_namespace_rejected() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     sender
-        .send_action(action(
-            "/normal",
-            SignalType::Event,
-            0.0,
-            Value::Integer(1),
-        ))
+        .send_action(action("/normal", SignalType::Event, 0.0, Value::Integer(1)))
         .await
         .unwrap();
 
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        receiver.recv_action(),
-    )
-    .await
-    .expect("Timed out — connection should still be alive after reserved namespace rejection")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+        .await
+        .expect("Timed out — connection should still be alive after reserved namespace rejection")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     assert_eq!(get_string(&map, "address").unwrap_or_default(), "/normal");
@@ -1813,25 +1591,18 @@ async fn hub_event_voice_joined() {
     let port = start_test_hub().await;
 
     // Subscribe to hub events before connecting the new voice.
-    let mut observer = Hub::connect(port, "observer")
-        .await
-        .unwrap();
+    let mut observer = Hub::connect(port, "observer").await.unwrap();
     observer.subscribe("/hub/**").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Connect a new voice — should trigger /hub/voice/joined.
-    let new_voice = Hub::connect(port, "new-voice")
-        .await
-        .unwrap();
+    let new_voice = Hub::connect(port, "new-voice").await.unwrap();
 
     // Observer should receive the joined event.
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        observer.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for voice joined event")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), observer.recv_action())
+        .await
+        .expect("Timed out waiting for voice joined event")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -1857,17 +1628,13 @@ async fn hub_event_voice_joined() {
 async fn hub_event_voice_left() {
     let port = start_test_hub().await;
 
-    let mut observer = Hub::connect(port, "observer")
-        .await
-        .unwrap();
+    let mut observer = Hub::connect(port, "observer").await.unwrap();
     observer.subscribe("/hub/**").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Connect and disconnect a voice.
     {
-        let voice = Hub::connect(port, "leaving-voice")
-            .await
-            .unwrap();
+        let voice = Hub::connect(port, "leaving-voice").await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Drain the joined event.
@@ -1884,13 +1651,10 @@ async fn hub_event_voice_left() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Observer should receive the left event.
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        observer.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for voice left event")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), observer.recv_action())
+        .await
+        .expect("Timed out waiting for voice left event")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -1906,15 +1670,11 @@ async fn hub_event_voice_left() {
 async fn hub_event_voice_renamed() {
     let port = start_test_hub().await;
 
-    let mut observer = Hub::connect(port, "observer")
-        .await
-        .unwrap();
+    let mut observer = Hub::connect(port, "observer").await.unwrap();
     observer.subscribe("/hub/**").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let voice = Hub::connect(port, "original-name")
-        .await
-        .unwrap();
+    let voice = Hub::connect(port, "original-name").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Drain the joined event.
@@ -1929,13 +1689,10 @@ async fn hub_event_voice_renamed() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Observer should receive the renamed event.
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        observer.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for voice renamed event")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), observer.recv_action())
+        .await
+        .expect("Timed out waiting for voice renamed event")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -1952,15 +1709,11 @@ async fn hub_event_voice_renamed() {
 async fn hub_event_manifest_set() {
     let port = start_test_hub().await;
 
-    let mut observer = Hub::connect(port, "observer")
-        .await
-        .unwrap();
+    let mut observer = Hub::connect(port, "observer").await.unwrap();
     observer.subscribe("/hub/**").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let voice = Hub::connect(port, "manifest-voice")
-        .await
-        .unwrap();
+    let voice = Hub::connect(port, "manifest-voice").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Drain the joined event.
@@ -1984,13 +1737,10 @@ async fn hub_event_manifest_set() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Observer should receive the manifest set event.
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        observer.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for manifest set event")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), observer.recv_action())
+        .await
+        .expect("Timed out waiting for manifest set event")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -2007,15 +1757,11 @@ async fn hub_event_manifest_set() {
 async fn hub_event_manifest_updated() {
     let port = start_test_hub().await;
 
-    let mut observer = Hub::connect(port, "observer")
-        .await
-        .unwrap();
+    let mut observer = Hub::connect(port, "observer").await.unwrap();
     observer.subscribe("/hub/**").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let voice = Hub::connect(port, "patch-voice")
-        .await
-        .unwrap();
+    let voice = Hub::connect(port, "patch-voice").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Drain the joined event.
@@ -2032,13 +1778,10 @@ async fn hub_event_manifest_updated() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Observer should receive the manifest updated event.
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        observer.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for manifest updated event")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), observer.recv_action())
+        .await
+        .expect("Timed out waiting for manifest updated event")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let address = get_string(&map, "address").unwrap_or_default();
@@ -2058,25 +1801,18 @@ async fn hub_events_do_not_affect_protocol_state() {
     // Hub events are ordinary actions and should not affect protocol state.
     // Verify that subscribing to /hub/** does not cause hub events to be
     // treated as params or affect routing.
-    let mut observer = Hub::connect(port, "observer")
-        .await
-        .unwrap();
+    let mut observer = Hub::connect(port, "observer").await.unwrap();
     observer.subscribe("/hub/**").await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Connect a voice — triggers hub event.
-    let voice = Hub::connect(port, "test-voice")
-        .await
-        .unwrap();
+    let voice = Hub::connect(port, "test-voice").await.unwrap();
 
     // Receive the hub event.
-    let msg = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        observer.recv_action(),
-    )
-    .await
-    .expect("Timed out waiting for hub event")
-    .expect("Channel closed");
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(2), observer.recv_action())
+        .await
+        .expect("Timed out waiting for hub event")
+        .expect("Channel closed");
 
     let map = payload_map(&msg);
     let signal_type = get_string(&map, "signal_type").unwrap_or_default();
@@ -2086,17 +1822,12 @@ async fn hub_events_do_not_affect_protocol_state() {
 
     // A late joiner subscribing to /hub/** should NOT receive the hub event
     // as a param replay (hub events are not stored as param state).
-    let mut joiner = Hub::connect(port, "joiner")
-        .await
-        .unwrap();
+    let mut joiner = Hub::connect(port, "joiner").await.unwrap();
     joiner.subscribe("/hub/**").await.unwrap();
 
     // Should NOT receive any param replay of hub events.
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(300),
-        joiner.recv_action(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(300), joiner.recv_action()).await;
     assert!(
         result.is_err(),
         "Hub events should not be stored as param state and replayed to late joiners"

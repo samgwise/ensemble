@@ -3,9 +3,9 @@
 //! Run the hub first:  cargo run --bin ensemble-hub
 //! Then this example:  cargo run --example ping_pong
 
-use std::collections::BTreeMap;
 use ensemble_client::Hub;
 use ensemble_core::protocol::*;
+use std::collections::BTreeMap;
 
 /// Extract payload map from WireMessage.
 fn payload_map(msg: &WireMessage) -> BTreeMap<String, Value> {
@@ -61,9 +61,7 @@ async fn main() {
         let address = get_string(&map, "address").unwrap_or_default();
         let payload = get_value(&map, "payload").unwrap_or(Value::Null);
 
-        println!(
-            "Voice B received from voice {source}: {address} => {payload:?}"
-        );
+        println!("Voice B received from voice {source}: {address} => {payload:?}");
 
         // Voice B sends a pong back.
         println!("Voice B sending /pong...");

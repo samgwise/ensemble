@@ -10,26 +10,66 @@ pub use ensemble_values::{FloatValue, Value};
 
 // Re-export the protocol types from ensemble-protocol.
 pub use ensemble_protocol::{
+    action,
+    action_with_source,
+    clock_ping,
+    clock_pong,
+    disconnect,
+    error,
+    get_field,
+    get_float,
+    get_integer,
+    get_string,
+    get_value,
+    // Helper functions
+    hello,
+    patch_manifest,
+    set_manifest,
+    subscribe,
+    unset_param,
+    unsubscribe,
+    update_name,
+    welcome,
+    ActionPayload,
+    ClockPingPayload,
+    ClockPongPayload,
+    ErrorPayload,
+    HelloPayload,
+    PatchManifestPayload,
+    SetManifestPayload,
+    // Payload structures
+    SignalType,
+    SubscribePayload,
+    UnsetParamPayload,
+    UnsubscribePayload,
+    UpdateNamePayload,
+    // Types
+    VoiceId,
+    WelcomePayload,
     // WireMessage envelope
     WireMessage,
-    // Message type constants
-    MSG_HELLO, MSG_WELCOME, MSG_DISCONNECT, MSG_SUBSCRIBE, MSG_UNSUBSCRIBE,
-    MSG_ACTION, MSG_UNSET_PARAM, MSG_CLOCK_PING, MSG_CLOCK_PONG, MSG_ERROR,
-    MSG_SET_MANIFEST, MSG_PATCH_MANIFEST, MSG_UPDATE_NAME,
+    ERR_INTERNAL_ERROR,
+    ERR_INVALID_MESSAGE,
+    ERR_INVALID_PATTERN,
+    ERR_MALFORMED_MANIFEST,
+    ERR_RESERVED_NAMESPACE,
     // Error codes
-    ERR_UNSUPPORTED_PROTOCOL_VERSION, ERR_INVALID_PATTERN, ERR_MALFORMED_MANIFEST,
-    ERR_INVALID_MESSAGE, ERR_INTERNAL_ERROR, ERR_RESERVED_NAMESPACE,
-    // Payload structures
-    SignalType, HelloPayload, WelcomePayload, SubscribePayload, UnsubscribePayload,
-    ActionPayload, UnsetParamPayload, ClockPingPayload, ClockPongPayload,
-    ErrorPayload, UpdateNamePayload, SetManifestPayload, PatchManifestPayload,
-    // Helper functions
-    hello, welcome, disconnect, subscribe, unsubscribe, action, action_with_source,
-    unset_param, clock_ping, clock_pong, error, update_name,
-    set_manifest, patch_manifest,
-    get_field, get_string, get_integer, get_float, get_value,
-    // Types
-    VoiceId, PROTOCOL_VERSION,
+    ERR_UNSUPPORTED_PROTOCOL_VERSION,
+    MSG_ACTION,
+    MSG_CLOCK_PING,
+    MSG_CLOCK_PONG,
+    MSG_DISCONNECT,
+    MSG_ERROR,
+    // Message type constants
+    MSG_HELLO,
+    MSG_PATCH_MANIFEST,
+    MSG_SET_MANIFEST,
+    MSG_SUBSCRIBE,
+    MSG_UNSET_PARAM,
+    MSG_UNSUBSCRIBE,
+    MSG_UPDATE_NAME,
+    MSG_WELCOME,
+    PROTOCOL_VERSION,
 };
 
 // Re-export manifest types from ensemble-manifest.

@@ -191,8 +191,18 @@ async fn main() -> Result<()> {
     eprintln!("Ensemble OSC Bridge");
     eprintln!("  Voice name: {}", config.name);
     eprintln!("  Ensemble prefix: {}", config.ens_prefix);
-    eprintln!("  OSC prefix: {}", if config.osc_prefix.is_empty() { "(none)" } else { &config.osc_prefix });
-    eprintln!("  OSC send: {}:{}", config.osc_send_host, config.osc_send_port);
+    eprintln!(
+        "  OSC prefix: {}",
+        if config.osc_prefix.is_empty() {
+            "(none)"
+        } else {
+            &config.osc_prefix
+        }
+    );
+    eprintln!(
+        "  OSC send: {}:{}",
+        config.osc_send_host, config.osc_send_port
+    );
     eprintln!("  OSC listen: {}", config.osc_listen_port);
 
     // Connect to hub.
@@ -242,7 +252,7 @@ async fn main() -> Result<()> {
                     );
                     let value = osc_to_ensemble_value(&received.message.args);
                     eprintln!("  ← OSC: {} (from {})", ens_addr, received.src_addr);
-                    
+
                     // Forward the OSC message to the hub as an Ensemble action.
                     let action_msg = action(
                         &ens_addr,

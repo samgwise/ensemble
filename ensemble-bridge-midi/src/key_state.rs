@@ -97,7 +97,8 @@ impl KeyStateStore {
         note: u8,
         velocity: u8,
     ) -> Option<MidiBytes> {
-        self.key(channel, note).play(event_id, channel, note, velocity)
+        self.key(channel, note)
+            .play(event_id, channel, note, velocity)
     }
 
     /// Attempt note-off. Returns MIDI bytes if the event ID is still valid.

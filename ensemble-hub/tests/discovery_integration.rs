@@ -9,9 +9,7 @@
 
 use std::fs;
 
-use ensemble_discovery::{
-    delete_port_file, is_port_bound, read_port_file, write_port_file,
-};
+use ensemble_discovery::{delete_port_file, is_port_bound, read_port_file, write_port_file};
 use ensemble_hub::start_server;
 
 /// Create a unique port file path for a test, stored under the OS temp dir.
@@ -112,5 +110,9 @@ async fn stale_port_file_cleanup_on_startup() {
     }
 
     // The stale port file should have been removed.
-    assert_eq!(read_port_file(), None, "stale port file should be cleaned up");
+    assert_eq!(
+        read_port_file(),
+        None,
+        "stale port file should be cleaned up"
+    );
 }

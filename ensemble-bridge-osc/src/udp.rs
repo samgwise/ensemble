@@ -7,8 +7,8 @@ use std::net::UdpSocket;
 use std::sync::mpsc as std_mpsc;
 use tokio::sync::mpsc;
 
-use rosc::{OscPacket, OscMessage, encoder};
 use rosc::decoder::decode_udp;
+use rosc::{encoder, OscMessage, OscPacket};
 
 /// Command sent to the UDP sender task.
 pub enum UdpSendCmd {
@@ -19,10 +19,7 @@ pub enum UdpSendCmd {
 /// Spawn a UDP sender task on a dedicated std thread.
 ///
 /// Returns a channel sender for queuing messages to send.
-pub fn spawn_udp_sender(
-    socket: UdpSocket,
-    target_addr: String,
-) -> mpsc::Sender<UdpSendCmd> {
+pub fn spawn_udp_sender(socket: UdpSocket, target_addr: String) -> mpsc::Sender<UdpSendCmd> {
     let (tx, mut rx) = mpsc::channel::<UdpSendCmd>(256);
 
     // rosc's encoder and UdpSocket are not async-friendly, so we use a std thread.
@@ -60,9 +57,7 @@ pub struct UdpReceivedMsg {
 /// Spawn a UDP listener task on a dedicated std thread.
 ///
 /// Returns a channel receiver for incoming OSC messages.
-pub fn spawn_udp_listener(
-    listen_port: u16,
-) -> anyhow::Result<std_mpsc::Receiver<UdpReceivedMsg>> {
+pub fn spawn_udp_listener(listen_port: u16) -> anyhow::Result<std_mpsc::Receiver<UdpReceivedMsg>> {
     let socket = UdpSocket::bind(format!("127.0.0.1:{}", listen_port))?;
     socket.set_nonblocking(false)?;
 

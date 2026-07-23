@@ -56,9 +56,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ensemble_clock::ClockSync;
-use ensemble_discovery as discovery;
 use ensemble_core::protocol::*;
 use ensemble_core::{codec, CodecError};
+use ensemble_discovery as discovery;
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -106,19 +106,15 @@ impl LocalClock {
     /// Process a clock pong reply.
     fn process_pong(&mut self, sequence: u64, hub_time: f64) {
         let voice_receive_time = self.local_now();
-        
+
         // Look up when we sent this ping.
         if let Some(voice_send_time) = self.pending_pings.remove(&sequence) {
             // The new protocol only gives us hub_time (when the hub sent the pong).
             // We assume the hub received the ping and sent the pong at essentially
             // the same time (zero processing time), so hub_receive_time = hub_send_time = hub_time.
             // This is a reasonable approximation for localhost and low-latency networks.
-            self.sync.process_reply(
-                voice_send_time,
-                hub_time,
-                hub_time,
-                voice_receive_time,
-            );
+            self.sync
+                .process_reply(voice_send_time, hub_time, hub_time, voice_receive_time);
         }
     }
 
@@ -159,10 +155,7 @@ pub struct Hub {
 
 impl Hub {
     /// Connect to an Ensemble hub on localhost.
-    pub async fn connect(
-        port: u16,
-        name: &str,
-    ) -> Result<Self, CodecError> {
+    pub async fn connect(port: u16, name: &str) -> Result<Self, CodecError> {
         let stream = TcpStream::connect(format!("127.0.0.1:{port}"))
             .await
             .map_err(CodecError::Io)?;
@@ -192,13 +185,12 @@ impl Hub {
                 )));
             }
         };
-        let voice_id = get_integer(&welcome_map, "voice_id")
-            .ok_or_else(|| {
-                CodecError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Welcome missing voice_id",
-                ))
-            })? as VoiceId;
+        let voice_id = get_integer(&welcome_map, "voice_id").ok_or_else(|| {
+            CodecError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Welcome missing voice_id",
+            ))
+        })? as VoiceId;
 
         let clock = Arc::new(Mutex::new(LocalClock::new()));
         let (write_tx, mut write_rx) = mpsc::channel::<WireMessage>(256);
@@ -285,9 +277,7 @@ impl Hub {
     /// Discovery order: port file (written by the hub at startup) → default
     /// port 7331. If the port file exists but the connection fails (e.g. stale
     /// file), the default port is tried as a fallback.
-    pub async fn connect_with_discovery(
-        name: &str,
-    ) -> Result<Self, CodecError> {
+    pub async fn connect_with_discovery(name: &str) -> Result<Self, CodecError> {
         // Try the port file first.
         if let Some(port) = discovery::read_port_file() {
             if discovery::is_port_bound(port) {

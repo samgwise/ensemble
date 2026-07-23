@@ -21,7 +21,7 @@
 //! - `Map` → JSON string (not directly representable)
 
 use ensemble_core::protocol::*;
-use rosc::{OscType, OscMessage};
+use rosc::{OscMessage, OscType};
 
 /// Convert an Ensemble value to a list of OSC arguments.
 ///
@@ -75,9 +75,7 @@ fn osc_type_to_value(osc: &OscType) -> Value {
         OscType::Blob(b) => Value::Binary(b.clone()),
         OscType::Bool(b) => Value::Bool(*b),
         OscType::Nil => Value::Null,
-        OscType::Array(arr) => {
-            Value::List(arr.content.iter().map(osc_type_to_value).collect())
-        }
+        OscType::Array(arr) => Value::List(arr.content.iter().map(osc_type_to_value).collect()),
         // Other OSC types (Midi, Color, Time) are rare; convert to string representation.
         other => Value::String(format!("{:?}", other)),
     }
@@ -146,11 +144,7 @@ pub fn translate_address_outbound(
 /// translate_address_inbound("/sc/synth/freq", "/sc", "/osc/in")
 ///   → "/osc/in/synth/freq"
 /// ```
-pub fn translate_address_inbound(
-    osc_addr: &str,
-    osc_prefix: &str,
-    ens_prefix: &str,
-) -> String {
+pub fn translate_address_inbound(osc_addr: &str, osc_prefix: &str, ens_prefix: &str) -> String {
     // Strip the OSC prefix if present.
     let stripped = if osc_prefix.is_empty() {
         osc_addr
@@ -177,10 +171,18 @@ pub fn translate_address_inbound(
 }
 
 /// Create an OSC message from an address and Ensemble payload.
-pub fn to_osc_message(ens_addr: &str, payload: &Value, ens_prefix: &str, osc_prefix: &str) -> Option<OscMessage> {
+pub fn to_osc_message(
+    ens_addr: &str,
+    payload: &Value,
+    ens_prefix: &str,
+    osc_prefix: &str,
+) -> Option<OscMessage> {
     let osc_addr = translate_address_outbound(ens_addr, ens_prefix, osc_prefix)?;
     let args = ensemble_to_osc_args(payload);
-    Some(OscMessage { addr: osc_addr, args })
+    Some(OscMessage {
+        addr: osc_addr,
+        args,
+    })
 }
 
 #[cfg(test)]

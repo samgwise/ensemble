@@ -18,8 +18,8 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use ensemble_discovery::{delete_port_file, is_port_bound, read_port_file, write_port_file};
 use ensemble_core::protocol::*;
+use ensemble_discovery::{delete_port_file, is_port_bound, read_port_file, write_port_file};
 use ensemble_hub::{start_server, HubState, ParamInfo, SharedState};
 use ensemble_routing::Pattern;
 
@@ -90,8 +90,8 @@ fn draw(frame: &mut Frame, app: &App, state: &HubState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header
-            Constraint::Length(3), // Tabs
+            Constraint::Length(3),      // Header
+            Constraint::Length(3),      // Tabs
             Constraint::Percentage(40), // Top: Voices + Manifest
             Constraint::Percentage(30), // Middle: Action Monitor
             Constraint::Percentage(30), // Bottom: Details
@@ -155,7 +155,11 @@ fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )
-        .block(Block::default().borders(Borders::ALL).title(" Detail Pane "));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Detail Pane "),
+        );
     frame.render_widget(tabs, area);
 }
 
@@ -167,7 +171,9 @@ fn draw_voice_browser(frame: &mut Frame, app: &App, state: &HubState, area: Rect
         .enumerate()
         .map(|(i, v)| {
             let style = if i == app.voice_selection {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -181,10 +187,11 @@ fn draw_voice_browser(frame: &mut Frame, app: &App, state: &HubState, area: Rect
         .collect();
 
     let voices_list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(format!(
-            " Voice Browser ({}) ",
-            voices.len()
-        )))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Voice Browser ({}) ", voices.len())),
+        )
         .highlight_style(Style::default().add_modifier(Modifier::BOLD));
 
     frame.render_widget(voices_list, area);
@@ -250,21 +257,24 @@ fn draw_manifest_browser(frame: &mut Frame, app: &App, state: &HubState, area: R
                 }
             }
 
-            Paragraph::new(lines)
-                .block(Block::default().borders(Borders::ALL).title(format!(
-                    " Manifest: {} ",
-                    voice.name
-                )))
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Manifest: {} ", voice.name)),
+            )
         } else {
-            Paragraph::new("No manifest set for this voice.")
-                .block(Block::default().borders(Borders::ALL).title(format!(
-                    " Manifest: {} ",
-                    voice.name
-                )))
+            Paragraph::new("No manifest set for this voice.").block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Manifest: {} ", voice.name)),
+            )
         }
     } else {
-        Paragraph::new("No voice selected.")
-            .block(Block::default().borders(Borders::ALL).title(" Manifest Browser "))
+        Paragraph::new("No voice selected.").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Manifest Browser "),
+        )
     };
 
     frame.render_widget(content, area);
@@ -446,12 +456,20 @@ fn draw_route_tester(frame: &mut Frame, app: &App, area: Rect) {
                 if ensemble_routing::matches_any(&[pattern], &app.route_address) {
                     lines.push(Line::from(vec![
                         Span::styled("  Result: ", Style::default().fg(Color::Green)),
-                        Span::styled("MATCH", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "MATCH",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     ]));
                 } else {
                     lines.push(Line::from(vec![
                         Span::styled("  Result: ", Style::default().fg(Color::Red)),
-                        Span::styled("NO MATCH", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "NO MATCH",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        ),
                     ]));
                 }
             }
@@ -463,8 +481,12 @@ fn draw_route_tester(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
     } else {
-        lines.push(Line::from("  Press 'i' to enter input mode, then type pattern and address."));
-        lines.push(Line::from("  Press 'Tab' to switch between fields, 'Esc' to exit input mode."));
+        lines.push(Line::from(
+            "  Press 'i' to enter input mode, then type pattern and address.",
+        ));
+        lines.push(Line::from(
+            "  Press 'Tab' to switch between fields, 'Esc' to exit input mode.",
+        ));
     }
 
     let input_mode_label = if app.route_input_mode {
@@ -627,7 +649,11 @@ fn parse_port_arg() -> Option<u16> {
 /// Priority: `--port` CLI argument > `ENSEMBLE_HUB_PORT` env var > default (7331).
 fn resolve_port() -> u16 {
     parse_port_arg()
-        .or_else(|| std::env::var("ENSEMBLE_HUB_PORT").ok().and_then(|s| s.parse().ok()))
+        .or_else(|| {
+            std::env::var("ENSEMBLE_HUB_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(DEFAULT_PORT)
 }
 

@@ -182,7 +182,10 @@ pub fn hello(name: impl Into<String>) -> WireMessage {
         MSG_HELLO,
         Value::Map({
             let mut m = BTreeMap::new();
-            m.insert("protocol_version".into(), Value::Integer(PROTOCOL_VERSION as i64));
+            m.insert(
+                "protocol_version".into(),
+                Value::Integer(PROTOCOL_VERSION as i64),
+            );
             m.insert("name".into(), Value::String(name.into()));
             m
         }),
@@ -503,7 +506,10 @@ mod tests {
 
     #[test]
     fn error_message_structure() {
-        let msg = error(ERR_INVALID_PATTERN, "Recursive wildcard must be final segment.");
+        let msg = error(
+            ERR_INVALID_PATTERN,
+            "Recursive wildcard must be final segment.",
+        );
         assert_eq!(msg.msg_type, MSG_ERROR);
         if let Value::Map(map) = &msg.payload {
             assert_eq!(get_string(map, "code"), Some(ERR_INVALID_PATTERN.into()));
@@ -582,12 +588,7 @@ mod tests {
 
     #[test]
     fn action_without_source_omits_source_field() {
-        let msg = action(
-            "/test",
-            SignalType::Event,
-            0.0,
-            Value::Null,
-        );
+        let msg = action("/test", SignalType::Event, 0.0, Value::Null);
         if let Value::Map(map) = &msg.payload {
             assert!(map.get("source").is_none());
             assert_eq!(get_string(map, "address"), Some("/test".into()));

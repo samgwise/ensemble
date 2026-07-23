@@ -134,7 +134,8 @@ impl HubState {
         self.log(format!("Voice {voice_id} disconnected ({reason})"));
         let voice_name = self.voices.remove(&voice_id).map(|v| v.name);
         // Remove param state owned by this voice.
-        self.param_state.retain(|_, (source, _)| *source != voice_id);
+        self.param_state
+            .retain(|_, (source, _)| *source != voice_id);
         // Remove scheduled actions from this voice.
         for actions in self.schedule.values_mut() {
             actions.retain(|sa| sa.source != voice_id);
@@ -455,23 +456,18 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                             // For future params, do NOT write to param_state yet.
                             // Activation-time retention: param becomes current only at its timestamp.
                             let key = timestamp_key(timestamp);
-                            st.schedule
-                                .entry(key)
-                                .or_default()
-                                .push(ScheduledAction {
-                                    source: voice_id,
-                                    message: routed_msg,
-                                    address,
-                                    signal_type,
-                                    timestamp,
-                                });
+                            st.schedule.entry(key).or_default().push(ScheduledAction {
+                                source: voice_id,
+                                message: routed_msg,
+                                address,
+                                signal_type,
+                                timestamp,
+                            });
                         } else {
                             // Immediate dispatch: store param state now.
                             if signal_type == SignalType::Param {
-                                st.param_state.insert(
-                                    address.clone(),
-                                    (voice_id, routed_msg.clone()),
-                                );
+                                st.param_state
+                                    .insert(address.clone(), (voice_id, routed_msg.clone()));
                             }
                             // Log the action for the Action Monitor.
                             let source_name = st
@@ -520,8 +516,8 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                                     patterns.push(p.clone());
                                     for (_source, action_msg) in st.param_state.values() {
                                         let action_map = payload_map(action_msg);
-                                        let address = get_string(&action_map, "address")
-                                            .unwrap_or_default();
+                                        let address =
+                                            get_string(&action_map, "address").unwrap_or_default();
                                         if matches_any(&patterns, &address) {
                                             replays.push(action_msg.clone());
                                         }
@@ -674,9 +670,7 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                             manifest.apply_patch(&patch_map);
                             manifest.name.clone()
                         };
-                        st.log(format!(
-                            "Voice {voice_id}: manifest patched (\"{name}\")"
-                        ));
+                        st.log(format!("Voice {voice_id}: manifest patched (\"{name}\")"));
                         // Emit hub event: manifest updated.
                         let updated_payload = Value::Map({
                             let mut m = BTreeMap::new();
@@ -689,7 +683,9 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 
                     other => {
                         let mut st = state.lock().await;
-                        st.log(format!("Voice {voice_id}: unexpected message type '{other}'"));
+                        st.log(format!(
+                            "Voice {voice_id}: unexpected message type '{other}'"
+                        ));
                     }
                 }
             }
@@ -747,12 +743,7 @@ async fn emit_hub_event(st: &HubState, address: &str, payload: Value) {
 /// Route an action to all subscribed voices (except the sender).
 /// Streams are dropped if the channel is full (best-effort delivery).
 /// Events and params wait for channel capacity (guaranteed delivery).
-async fn route_action(
-    st: &HubState,
-    source: VoiceId,
-    address: &str,
-    msg: &WireMessage,
-) {
+async fn route_action(st: &HubState, source: VoiceId, address: &str, msg: &WireMessage) {
     // Extract signal type from the message for congestion handling.
     let signal_type = match &msg.payload {
         Value::Map(m) => get_string(m, "signal_type")
@@ -786,11 +777,7 @@ async fn run_scheduler(state: SharedState) {
             let now_key = timestamp_key(now);
 
             // Collect all keys that are due (timestamp <= now).
-            let due_keys: Vec<u64> = st
-                .schedule
-                .range(..=now_key)
-                .map(|(k, _)| *k)
-                .collect();
+            let due_keys: Vec<u64> = st.schedule.range(..=now_key).map(|(k, _)| *k).collect();
 
             // Dispatch them.
             for key in due_keys {
@@ -816,7 +803,13 @@ async fn run_scheduler(state: SharedState) {
                             address: scheduled.address.clone(),
                             signal_type: scheduled.signal_type,
                         });
-                        route_action(&st, scheduled.source, &scheduled.address, &scheduled.message).await;
+                        route_action(
+                            &st,
+                            scheduled.source,
+                            &scheduled.address,
+                            &scheduled.message,
+                        )
+                        .await;
                     }
                 }
             }

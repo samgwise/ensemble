@@ -80,47 +80,65 @@ impl AppState {
         let now = self.hub.now().await;
 
         let pattern_values: Vec<Value> = self.pattern.iter().map(|&p| Value::Integer(p)).collect();
-        let _ = self.hub.send_action(action(
-            "/demo/pitch/pattern",
-            SignalType::Param,
-            now,
-            Value::List(pattern_values),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/pitch/pattern",
+                SignalType::Param,
+                now,
+                Value::List(pattern_values),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/pitch/trigger",
-            SignalType::Param,
-            now,
-            Value::String(self.trigger_address.clone()),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/pitch/trigger",
+                SignalType::Param,
+                now,
+                Value::String(self.trigger_address.clone()),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/pitch/output",
-            SignalType::Param,
-            now,
-            Value::String(self.output_address.clone()),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/pitch/output",
+                SignalType::Param,
+                now,
+                Value::String(self.output_address.clone()),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/pitch/channel",
-            SignalType::Param,
-            now,
-            Value::Integer(self.channel),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/pitch/channel",
+                SignalType::Param,
+                now,
+                Value::Integer(self.channel),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/pitch/velocity",
-            SignalType::Param,
-            now,
-            Value::Integer(self.velocity),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/pitch/velocity",
+                SignalType::Param,
+                now,
+                Value::Integer(self.velocity),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/pitch/duration",
-            SignalType::Param,
-            now,
-            Value::Float(FloatValue::new(self.duration)),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/pitch/duration",
+                SignalType::Param,
+                now,
+                Value::Float(FloatValue::new(self.duration)),
+            ))
+            .await;
     }
 
     /// Advance to the next pitch and send a MIDI note.
@@ -137,17 +155,20 @@ impl AppState {
         // Send MIDI note to the output address.
         // Format: (channel, pitch, velocity, duration) as a Tuple.
         let now = self.hub.now().await;
-        let _ = self.hub.send_action(action(
-            &self.output_address,
-            SignalType::Event,
-            now,
-            Value::Tuple(vec![
-                Value::Integer(self.channel),
-                Value::Integer(pitch),
-                Value::Integer(self.velocity),
-                Value::Float(FloatValue::new(self.duration)),
-            ]),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                &self.output_address,
+                SignalType::Event,
+                now,
+                Value::Tuple(vec![
+                    Value::Integer(self.channel),
+                    Value::Integer(pitch),
+                    Value::Integer(self.velocity),
+                    Value::Float(FloatValue::new(self.duration)),
+                ]),
+            ))
+            .await;
     }
 }
 
@@ -199,10 +220,7 @@ async fn run_event_listener(state: Arc<Mutex<AppState>>) {
 async fn main() -> Result<()> {
     // Connect to the hub using automatic discovery.
     let hub = Hub::connect_with_discovery("pitch-cycler").await?;
-    eprintln!(
-        "Connected to hub as voice #{} — Pitch Cycler",
-        hub.voice_id
-    );
+    eprintln!("Connected to hub as voice #{} — Pitch Cycler", hub.voice_id);
 
     // Build shared state.
     let state = Arc::new(Mutex::new(AppState::new(hub)));

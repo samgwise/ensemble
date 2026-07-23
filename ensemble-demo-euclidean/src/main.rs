@@ -61,51 +61,69 @@ impl AppState {
         let s = &self.scheduler;
         let now = self.hub.now().await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/euclid/bpm",
-            SignalType::Param,
-            now,
-            Value::Float(FloatValue::new(s.bpm)),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/euclid/bpm",
+                SignalType::Param,
+                now,
+                Value::Float(FloatValue::new(s.bpm)),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/euclid/steps",
-            SignalType::Param,
-            now,
-            Value::Integer(s.steps as i64),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/euclid/steps",
+                SignalType::Param,
+                now,
+                Value::Integer(s.steps as i64),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/euclid/hits",
-            SignalType::Param,
-            now,
-            Value::Integer(s.hits as i64),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/euclid/hits",
+                SignalType::Param,
+                now,
+                Value::Integer(s.hits as i64),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/euclid/rotation",
-            SignalType::Param,
-            now,
-            Value::Integer(s.rotation as i64),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/euclid/rotation",
+                SignalType::Param,
+                now,
+                Value::Integer(s.rotation as i64),
+            ))
+            .await;
 
-        let _ = self.hub.send_action(action(
-            "/demo/euclid/output",
-            SignalType::Param,
-            now,
-            Value::String(s.output_address.clone()),
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                "/demo/euclid/output",
+                SignalType::Param,
+                now,
+                Value::String(s.output_address.clone()),
+            ))
+            .await;
     }
 
     /// Send a trigger event to the output address.
     pub async fn send_trigger(&self) {
         let now = self.hub.now().await;
-        let _ = self.hub.send_action(action(
-            &self.scheduler.output_address,
-            SignalType::Event,
-            now,
-            Value::Null,
-        )).await;
+        let _ = self
+            .hub
+            .send_action(action(
+                &self.scheduler.output_address,
+                SignalType::Event,
+                now,
+                Value::Null,
+            ))
+            .await;
     }
 }
 

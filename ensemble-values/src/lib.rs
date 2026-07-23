@@ -387,11 +387,14 @@ mod tests {
     fn nested_map_with_list_roundtrip() {
         let mut inner_map = BTreeMap::new();
         inner_map.insert("name".into(), Value::String("Bass".into()));
-        inner_map.insert("notes".into(), Value::List(vec![
-            Value::Integer(60),
-            Value::Integer(62),
-            Value::Integer(64),
-        ]));
+        inner_map.insert(
+            "notes".into(),
+            Value::List(vec![
+                Value::Integer(60),
+                Value::Integer(62),
+                Value::Integer(64),
+            ]),
+        );
 
         let mut outer_map = BTreeMap::new();
         outer_map.insert("track".into(), Value::Map(inner_map));
@@ -405,9 +408,21 @@ mod tests {
     #[test]
     fn list_of_tuples_roundtrip() {
         let v = Value::List(vec![
-            Value::Tuple(vec![Value::Integer(0), Value::Integer(60), Value::Integer(100)]),
-            Value::Tuple(vec![Value::Integer(0), Value::Integer(64), Value::Integer(100)]),
-            Value::Tuple(vec![Value::Integer(0), Value::Integer(67), Value::Integer(100)]),
+            Value::Tuple(vec![
+                Value::Integer(0),
+                Value::Integer(60),
+                Value::Integer(100),
+            ]),
+            Value::Tuple(vec![
+                Value::Integer(0),
+                Value::Integer(64),
+                Value::Integer(100),
+            ]),
+            Value::Tuple(vec![
+                Value::Integer(0),
+                Value::Integer(67),
+                Value::Integer(100),
+            ]),
         ]);
         let encoded = rmp_serde::to_vec(&v).unwrap();
         let decoded: Value = rmp_serde::from_slice(&encoded).unwrap();

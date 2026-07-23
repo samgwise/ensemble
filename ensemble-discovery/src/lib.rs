@@ -123,7 +123,9 @@ pub fn get_port_file_path() -> PathBuf {
                 .map(|p| format!("{}\\AppData\\Local", p))
                 .unwrap_or_else(|_| ".".to_string())
         });
-        PathBuf::from(local_app_data).join("Ensemble").join("hub.port")
+        PathBuf::from(local_app_data)
+            .join("Ensemble")
+            .join("hub.port")
     }
 }
 
@@ -132,11 +134,14 @@ fn get_unix_uid() -> u32 {
     fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|content| {
-            content.lines().find(|line| line.starts_with("Uid:")).and_then(|line| {
-                line.split_whitespace()
-                    .nth(1)
-                    .and_then(|value| value.parse().ok())
-            })
+            content
+                .lines()
+                .find(|line| line.starts_with("Uid:"))
+                .and_then(|line| {
+                    line.split_whitespace()
+                        .nth(1)
+                        .and_then(|value| value.parse().ok())
+                })
         })
         .unwrap_or(0)
 }

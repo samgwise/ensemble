@@ -72,7 +72,10 @@ pub async fn run_scheduler(state: Arc<Mutex<AppState>>) {
                 break;
             }
             let pattern = s.pattern();
-            let is_hit = pattern.get(s.scheduler.current_step).copied().unwrap_or(false);
+            let is_hit = pattern
+                .get(s.scheduler.current_step)
+                .copied()
+                .unwrap_or(false);
             (s.scheduler.step_duration(), is_hit, s.running)
         };
 

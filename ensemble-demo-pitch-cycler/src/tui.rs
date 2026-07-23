@@ -26,7 +26,9 @@ use crate::AppState;
 
 /// MIDI note number to note name (e.g., 60 → "C4").
 fn midi_note_name(note: i64) -> String {
-    let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    let names = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
     let octave = (note / 12) - 1;
     let name = names[(note % 12) as usize];
     format!("{}{}", name, octave)
@@ -44,7 +46,7 @@ fn draw(frame: &mut Frame, state: &AppState) {
             Constraint::Length(3), // Header
             Constraint::Length(5), // Pattern
             Constraint::Length(6), // Params
-            Constraint::Min(3),   // Controls
+            Constraint::Min(3),    // Controls
         ])
         .split(frame.area());
 
@@ -63,7 +65,11 @@ fn draw_header(frame: &mut Frame, state: &AppState, area: Rect) {
         state.pattern.len()
     ))
     .style(Style::default().fg(Color::Cyan))
-    .block(Block::default().borders(Borders::ALL).title(" Ensemble — Pitch Cycler "));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Ensemble — Pitch Cycler "),
+    );
     frame.render_widget(header, area);
 }
 
@@ -74,7 +80,9 @@ fn draw_pattern(frame: &mut Frame, state: &AppState, area: Rect) {
     for (i, &pitch) in state.pattern.iter().enumerate() {
         let note_name = midi_note_name(pitch);
         let style = if i == state.current_index {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Green)
         };
@@ -89,12 +97,8 @@ fn draw_pattern(frame: &mut Frame, state: &AppState, area: Rect) {
         None => "Last played: (none)".to_string(),
     };
 
-    let pattern_widget = Paragraph::new(vec![
-        pattern_line,
-        Line::from(""),
-        Line::from(last_info),
-    ])
-    .block(Block::default().borders(Borders::ALL).title(" Pattern "));
+    let pattern_widget = Paragraph::new(vec![pattern_line, Line::from(""), Line::from(last_info)])
+        .block(Block::default().borders(Borders::ALL).title(" Pattern "));
 
     frame.render_widget(pattern_widget, area);
 }
@@ -120,8 +124,8 @@ fn draw_params(frame: &mut Frame, state: &AppState, area: Rect) {
         ]),
     ];
 
-    let params_widget = Paragraph::new(params)
-        .block(Block::default().borders(Borders::ALL).title(" Params "));
+    let params_widget =
+        Paragraph::new(params).block(Block::default().borders(Borders::ALL).title(" Params "));
 
     frame.render_widget(params_widget, area);
 }
@@ -153,8 +157,8 @@ fn draw_controls(frame: &mut Frame, area: Rect) {
         ]),
     ];
 
-    let controls_widget = Paragraph::new(controls)
-        .block(Block::default().borders(Borders::ALL).title(" Controls "));
+    let controls_widget =
+        Paragraph::new(controls).block(Block::default().borders(Borders::ALL).title(" Controls "));
 
     frame.render_widget(controls_widget, area);
 }

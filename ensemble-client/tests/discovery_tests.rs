@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ensemble_core::codec;
-use ensemble_discovery as discovery;
 use ensemble_core::protocol::*;
+use ensemble_discovery as discovery;
 use ensemble_routing::{matches_any, Pattern};
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
@@ -287,7 +287,10 @@ async fn connect_with_discovery_stale_port_file_falls_back_to_running_hub() {
     // port file with an invalid port and confirming the error is a connection
     // error (not a parse error).
     let result = Hub::connect_with_discovery("stale-fallback-test").await;
-    assert!(result.is_err(), "Should fail gracefully with stale port file");
+    assert!(
+        result.is_err(),
+        "Should fail gracefully with stale port file"
+    );
 }
 
 #[tokio::test]

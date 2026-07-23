@@ -84,12 +84,7 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_action() {
-        let msg = action(
-            "/synth/note",
-            SignalType::Event,
-            0.0,
-            Value::Integer(60),
-        );
+        let msg = action("/synth/note", SignalType::Event, 0.0, Value::Integer(60));
 
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
@@ -176,12 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip_empty_payload() {
-        let msg = action(
-            "/bang",
-            SignalType::Event,
-            0.0,
-            Value::Null,
-        );
+        let msg = action("/bang", SignalType::Event, 0.0, Value::Null);
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
         let decoded = read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
@@ -216,11 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_messages_in_sequence() {
-        let msgs = vec![
-            disconnect(),
-            clock_ping(5),
-            hello("multi"),
-        ];
+        let msgs = vec![disconnect(), clock_ping(5), hello("multi")];
 
         let mut buf = Vec::new();
         for msg in &msgs {

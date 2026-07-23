@@ -25,7 +25,11 @@ fn parse_port_arg() -> Option<u16> {
 /// Priority: `--port` CLI argument > `ENSEMBLE_HUB_PORT` env var > default (7331).
 fn resolve_port() -> u16 {
     parse_port_arg()
-        .or_else(|| std::env::var("ENSEMBLE_HUB_PORT").ok().and_then(|s| s.parse().ok()))
+        .or_else(|| {
+            std::env::var("ENSEMBLE_HUB_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(DEFAULT_PORT)
 }
 

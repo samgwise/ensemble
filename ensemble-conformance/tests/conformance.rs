@@ -39,7 +39,9 @@ mod routing {
                 assert!(
                     result.is_some(),
                     "Fixture '{}': expected match of '{}' against '{}'",
-                    name, address, pattern_str
+                    name,
+                    address,
+                    pattern_str
                 );
 
                 // Verify captures if specified.
@@ -52,7 +54,9 @@ mod routing {
                             caps.get(key),
                             Some(expected),
                             "Fixture '{}': capture '{}' expected '{}'",
-                            name, key, expected
+                            name,
+                            key,
+                            expected
                         );
                     }
                 }
@@ -60,7 +64,9 @@ mod routing {
                 assert!(
                     result.is_none(),
                     "Fixture '{}': expected no match of '{}' against '{}'",
-                    name, address, pattern_str
+                    name,
+                    address,
+                    pattern_str
                 );
             }
         }
@@ -80,13 +86,15 @@ mod routing {
                 assert!(
                     Pattern::parse(&pattern_str).is_err(),
                     "Fixture '{}': expected '{}' to be rejected",
-                    name, pattern_str
+                    name,
+                    pattern_str
                 );
             } else {
                 assert!(
                     Pattern::parse(&pattern_str).is_ok(),
                     "Fixture '{}': expected '{}' to parse",
-                    name, pattern_str
+                    name,
+                    pattern_str
                 );
             }
         }
@@ -129,22 +137,24 @@ mod routing {
                 assert!(
                     result.is_err(),
                     "Fixture '{}': action to '{}' should be rejected",
-                    name, address
+                    name,
+                    address
                 );
             } else {
-                let msg = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    receiver.recv_action(),
-                )
-                .await
-                .unwrap_or_else(|_| panic!("Fixture '{}': timed out waiting for action", name))
-                .expect("Fixture '{}': channel closed");
+                let msg =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                        .await
+                        .unwrap_or_else(|_| {
+                            panic!("Fixture '{}': timed out waiting for action", name)
+                        })
+                        .expect("Fixture '{}': channel closed");
                 let map = payload_map(&msg);
                 assert_eq!(
                     get_string(&map, "address").unwrap_or_default(),
                     address,
                     "Fixture '{}': expected address '{}'",
-                    name, address
+                    name,
+                    address
                 );
             }
 
@@ -279,7 +289,8 @@ mod protocol {
             assert!(
                 known_codes.contains(&expected_code.as_str()),
                 "Fixture '{}': error code '{}' not found in known codes",
-                name, expected_code
+                name,
+                expected_code
             );
 
             // Verify the error() helper creates a proper error message.
@@ -319,7 +330,8 @@ mod protocol {
                     assert!(
                         action_payload.get(field_name).is_some(),
                         "Fixture '{}': expected field '{}' in action payload",
-                        name, field_name
+                        name,
+                        field_name
                     );
                 }
             }
@@ -346,7 +358,10 @@ mod lifecycle {
         // duplicate_names_accepted
         let hub_a = Hub::connect(port, "same-name").await.unwrap();
         let hub_b = Hub::connect(port, "same-name").await.unwrap();
-        assert_ne!(hub_a.voice_id, hub_b.voice_id, "Duplicate names should get distinct IDs");
+        assert_ne!(
+            hub_a.voice_id, hub_b.voice_id,
+            "Duplicate names should get distinct IDs"
+        );
         hub_a.disconnect().await;
         hub_b.disconnect().await;
 
@@ -382,11 +397,9 @@ mod lifecycle {
             let mut joiner = Hub::connect(port, "joiner").await.unwrap();
             joiner.subscribe("/temp").await.unwrap();
 
-            let result = tokio::time::timeout(
-                std::time::Duration::from_millis(300),
-                joiner.recv_action(),
-            )
-            .await;
+            let result =
+                tokio::time::timeout(std::time::Duration::from_millis(300), joiner.recv_action())
+                    .await;
             assert!(
                 result.is_err(),
                 "Disconnected voice's params should be cleaned up"
@@ -417,11 +430,9 @@ mod lifecycle {
             let mut joiner = Hub::connect(port, "joiner").await.unwrap();
             joiner.subscribe("/pressure").await.unwrap();
 
-            let result = tokio::time::timeout(
-                std::time::Duration::from_millis(300),
-                joiner.recv_action(),
-            )
-            .await;
+            let result =
+                tokio::time::timeout(std::time::Duration::from_millis(300), joiner.recv_action())
+                    .await;
             assert!(
                 result.is_err(),
                 "Ungraceful disconnect should clean up params"
@@ -453,13 +464,11 @@ mod scheduling {
                 .await
                 .unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                receiver.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                    .await
+                    .expect("Timed out")
+                    .expect("Channel closed");
             let map = payload_map(&msg);
             assert_eq!(get_integer(&map, "payload"), Some(1));
 
@@ -480,13 +489,11 @@ mod scheduling {
                 .await
                 .unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                receiver.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                    .await
+                    .expect("Timed out")
+                    .expect("Channel closed");
             let map = payload_map(&msg);
             assert_eq!(get_integer(&map, "payload"), Some(2));
 
@@ -506,17 +513,20 @@ mod scheduling {
             let before_send = Instant::now();
 
             sender
-                .send_action(action("/test", SignalType::Event, future_time, Value::Integer(3)))
+                .send_action(action(
+                    "/test",
+                    SignalType::Event,
+                    future_time,
+                    Value::Integer(3),
+                ))
                 .await
                 .unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                receiver.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv_action())
+                    .await
+                    .expect("Timed out")
+                    .expect("Channel closed");
 
             let elapsed = before_send.elapsed();
             assert!(
@@ -548,13 +558,11 @@ mod scheduling {
             }
 
             for expected in 0..3 {
-                let msg = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    receiver.recv_action(),
-                )
-                .await
-                .expect("Timed out")
-                .expect("Channel closed");
+                let msg =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                        .await
+                        .expect("Timed out")
+                        .expect("Channel closed");
                 let map = payload_map(&msg);
                 assert_eq!(
                     get_integer(&map, "payload"),
@@ -601,13 +609,10 @@ mod scheduling {
             let mut joiner = Hub::connect(port, "joiner").await.unwrap();
             joiner.subscribe("/level").await.unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                joiner.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(2), joiner.recv_action())
+                .await
+                .expect("Timed out")
+                .expect("Channel closed");
             let map = payload_map(&msg);
             let payload = get_float(&map, "payload").unwrap_or(0.0);
             assert!(
@@ -652,13 +657,11 @@ mod scheduling {
             let mut joiner2 = Hub::connect(port, "joiner2").await.unwrap();
             joiner2.subscribe("/level").await.unwrap();
 
-            let msg2 = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                joiner2.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg2 =
+                tokio::time::timeout(std::time::Duration::from_secs(2), joiner2.recv_action())
+                    .await
+                    .expect("Timed out")
+                    .expect("Channel closed");
             let map2 = payload_map(&msg2);
             let payload2 = get_float(&map2, "payload").unwrap_or(0.0);
             assert!(
@@ -702,13 +705,10 @@ mod params {
             let mut joiner = Hub::connect(port, "joiner").await.unwrap();
             joiner.subscribe("/synth/*").await.unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                joiner.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(2), joiner.recv_action())
+                .await
+                .expect("Timed out")
+                .expect("Channel closed");
             let map = payload_map(&msg);
             assert_eq!(get_string(&map, "address").unwrap(), "/synth/cutoff");
             let payload = get_float(&map, "payload").unwrap_or(0.0);
@@ -747,16 +747,17 @@ mod params {
             let mut joiner = Hub::connect(port, "joiner").await.unwrap();
             joiner.subscribe("/level").await.unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                joiner.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(2), joiner.recv_action())
+                .await
+                .expect("Timed out")
+                .expect("Channel closed");
             let map = payload_map(&msg);
             let payload = get_float(&map, "payload").unwrap_or(0.0);
-            assert!((payload - 0.8).abs() < 0.01, "Expected 0.8, got {}", payload);
+            assert!(
+                (payload - 0.8).abs() < 0.01,
+                "Expected 0.8, got {}",
+                payload
+            );
 
             setter.disconnect().await;
             joiner.disconnect().await;
@@ -794,13 +795,11 @@ mod params {
             // Should receive two param replays.
             let mut received = std::collections::HashMap::new();
             for _ in 0..2 {
-                let msg = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    joiner.recv_action(),
-                )
-                .await
-                .expect("Timed out")
-                .expect("Channel closed");
+                let msg =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), joiner.recv_action())
+                        .await
+                        .expect("Timed out")
+                        .expect("Channel closed");
                 let map = payload_map(&msg);
                 let addr = get_string(&map, "address").unwrap();
                 let val = get_float(&map, "payload").unwrap_or(0.0);
@@ -852,13 +851,11 @@ mod manifests {
                 .await
                 .unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                receiver.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                    .await
+                    .expect("Timed out")
+                    .expect("Channel closed");
             let map = payload_map(&msg);
             assert_eq!(get_string(&map, "address").unwrap(), "/test");
 
@@ -884,13 +881,11 @@ mod manifests {
                 .await
                 .unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                receiver.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                    .await
+                    .expect("Timed out")
+                    .expect("Channel closed");
 
             hub.disconnect().await;
             receiver.disconnect().await;
@@ -937,13 +932,11 @@ mod manifests {
                 .await
                 .unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                receiver.recv_action(),
-            )
-            .await
-            .expect("Timed out")
-            .expect("Channel closed");
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                    .await
+                    .expect("Timed out")
+                    .expect("Channel closed");
 
             hub.disconnect().await;
             receiver.disconnect().await;
@@ -971,17 +964,20 @@ mod manifests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
             sender
-                .send_action(action("/test/foo", SignalType::Event, 0.0, Value::Integer(42)))
+                .send_action(action(
+                    "/test/foo",
+                    SignalType::Event,
+                    0.0,
+                    Value::Integer(42),
+                ))
                 .await
                 .unwrap();
 
-            let msg = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                receiver.recv_action(),
-            )
-            .await
-            .expect("Timed out — manifest should not affect routing")
-            .expect("Channel closed");
+            let msg =
+                tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
+                    .await
+                    .expect("Timed out — manifest should not affect routing")
+                    .expect("Channel closed");
             let map = payload_map(&msg);
             assert_eq!(get_string(&map, "address").unwrap(), "/test/foo");
             assert_eq!(get_integer(&map, "payload"), Some(42));

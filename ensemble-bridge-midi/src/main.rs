@@ -31,9 +31,7 @@ enum MidiOutCmd {
 }
 
 /// Spawn a task that owns the MIDI output connection and sends bytes.
-fn spawn_midi_output(
-    conn: midir::MidiOutputConnection,
-) -> mpsc::Sender<MidiOutCmd> {
+fn spawn_midi_output(conn: midir::MidiOutputConnection) -> mpsc::Sender<MidiOutCmd> {
     let (tx, mut rx) = mpsc::channel::<MidiOutCmd>(256);
 
     // midir's MidiOutputConnection is not Send on all platforms, so we use
@@ -144,9 +142,7 @@ async fn run_action_router(
         let payload = get_value(&map, "payload").unwrap_or(Value::Null);
 
         if address == "/midi/play" {
-            if let Some((channel, note, velocity, duration_secs)) =
-                parse_play_payload(&payload)
-            {
+            if let Some((channel, note, velocity, duration_secs)) = parse_play_payload(&payload) {
                 // Bump mutex — invalidates any previous pending note-off.
                 let event_id = {
                     let mut ks = key_store.lock().await;
@@ -204,10 +200,7 @@ async fn run_action_router(
 // ---------------------------------------------------------------------------
 
 /// Spawn a MIDI input listener that publishes incoming MIDI as Ensemble actions.
-fn spawn_midi_input(
-    port_index: usize,
-    hub_tx: mpsc::Sender<WireMessage>,
-) -> anyhow::Result<()> {
+fn spawn_midi_input(port_index: usize, hub_tx: mpsc::Sender<WireMessage>) -> anyhow::Result<()> {
     let midi_in = MidiInput::new("ensemble-bridge-midi-in")?;
     let ports = midi_in.ports();
     let port = ports
@@ -373,7 +366,10 @@ async fn main() -> anyhow::Result<()> {
     };
     hub.subscribe("/midi/*").await?;
     if explicit_port.is_some() {
-        eprintln!("Connected to hub on port {hub_port} as voice #{}", hub.voice_id);
+        eprintln!(
+            "Connected to hub on port {hub_port} as voice #{}",
+            hub.voice_id
+        );
     } else {
         eprintln!("Connected to hub as voice #{}", hub.voice_id);
     }
@@ -386,7 +382,7 @@ async fn main() -> anyhow::Result<()> {
         // Get a sender handle for forwarding MIDI input to the hub.
         let hub_sender = hub.sender();
         let hub_for_input = hub.voice_id;
-        
+
         // Forward MIDI input actions to the hub.
         tokio::spawn(async move {
             while let Some(msg) = msg_rx.recv().await {
@@ -399,7 +395,7 @@ async fn main() -> anyhow::Result<()> {
                     "MIDI input (voice {hub_for_input}): {} {:?}",
                     address, msg.payload
                 );
-                
+
                 // Forward the MIDI input action to the hub.
                 if let Err(e) = hub_sender.send(msg).await {
                     eprintln!("Failed to send MIDI input to hub: {}", e);

@@ -158,11 +158,21 @@ impl VoiceManifest {
         );
         m.insert(
             "provides".into(),
-            Value::List(self.provides.iter().map(|c| Value::String(c.clone())).collect()),
+            Value::List(
+                self.provides
+                    .iter()
+                    .map(|c| Value::String(c.clone()))
+                    .collect(),
+            ),
         );
         m.insert(
             "expects".into(),
-            Value::List(self.expects.iter().map(|c| Value::String(c.clone())).collect()),
+            Value::List(
+                self.expects
+                    .iter()
+                    .map(|c| Value::String(c.clone()))
+                    .collect(),
+            ),
         );
         m.insert(
             "routes".into(),
@@ -417,7 +427,10 @@ mod tests {
         assert_eq!(manifest.tags, vec!["new-tag"]);
         // Name and other fields unchanged.
         assert_eq!(manifest.name, "MIDI Bridge");
-        assert_eq!(manifest.description, Some("Provides MIDI input and output integration.".into()));
+        assert_eq!(
+            manifest.description,
+            Some("Provides MIDI input and output integration.".into())
+        );
     }
 
     #[test]
@@ -526,7 +539,7 @@ mod tests {
             Value::List(vec![
                 valid_route.to_value(),
                 Value::String("not a route".into()), // Invalid — should be skipped.
-                Value::Integer(42),                   // Invalid — should be skipped.
+                Value::Integer(42),                  // Invalid — should be skipped.
             ]),
         );
         manifest.apply_patch(&patch);

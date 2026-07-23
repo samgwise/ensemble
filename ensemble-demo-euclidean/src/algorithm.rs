@@ -72,7 +72,10 @@ mod tests {
         assert_eq!(pattern.len(), 8);
         assert_eq!(pattern.iter().filter(|&&b| b).count(), 3);
         // Bucket-fill produces: [. . X . . X . X]
-        assert_eq!(pattern, vec![false, false, true, false, false, true, false, true]);
+        assert_eq!(
+            pattern,
+            vec![false, false, true, false, false, true, false, true]
+        );
     }
 
     #[test]
@@ -85,9 +88,7 @@ mod tests {
         assert_eq!(
             pattern,
             vec![
-                false, false, false, true,
-                false, false, false, true,
-                false, false, false, true,
+                false, false, false, true, false, false, false, true, false, false, false, true,
                 false, false, false, true,
             ]
         );
@@ -111,7 +112,10 @@ mod tests {
         assert_eq!(pattern.len(), 8);
         assert_eq!(pattern.iter().filter(|&&b| b).count(), 3);
         // Base pattern [. . X . . X . X] rotated left by 2 = [X . . X . X . .]
-        assert_eq!(pattern, vec![true, false, false, true, false, true, false, false]);
+        assert_eq!(
+            pattern,
+            vec![true, false, false, true, false, true, false, false]
+        );
     }
 
     #[test]
