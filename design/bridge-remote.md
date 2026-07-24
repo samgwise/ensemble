@@ -293,15 +293,24 @@ When an `unset_param` action is received, the corresponding cache entry is remov
 
 After the peer handshake completes, the peer manager sends each cached param through a dedicated replay channel to the new peer. The param is mapped through the outbound mapping rules before being sent as a `bridge_action`. This ensures the receiving bridge sees the param in the remote namespace.
 
-## Graceful Shutdown (Pending)
+## Graceful Shutdown
 
-The current implementation handles a shutdown signal by exiting the main run loop. However, the QUIC listener task and several other spawned tasks are not explicitly cancelled, so the UDP socket may remain bound briefly. This is the blocker for the reconnection integration test, which needs to restart a bridge on the same listener port.
+A shared `CancellationToken` and `TaskTracker` (from `tokio-util`) propagate through the bridge. On shutdown (`Ctrl+C` or the embedded shutdown signal) `run_bridge` cancels the token and calls `tracker.close()` then `tracker.wait().await`, which blocks until every spawned task has exited.
 
-Planned work:
+Cancellation reaches:
 
-1. Store the listener task and all spawned task join handles in `BridgeHandle`.
-2. On shutdown, send a cancellation signal and await the listener task so the UDP endpoint is released.
-3. Close the peer manager and all active QUIC connections cleanly.
+* the QUIC listener (stops accepting, calls `endpoint.close()`, and drops the endpoint)
+* the inbound-peer register loop
+* the peer manager event loop (and any pending outbound reconnect backoff)
+* the local-hub forwarder
+* the inbound forwarder
+* every active peer session, via a child token scoped to that session
+
+Each peer session runs its writer and reader sub-tasks in a `JoinSet`. When the first finishes (peer disconnect or shutdown) the session cancels its child token and joins the rest, so the tracked session task does not return while a sub-task lingers.
+
+### UDP port release
+
+Dropping a quinn `Endpoint` does not synchronously close the UDP socket; an internal driver task releases it shortly afterwards. So `shutdown()` returning means the endpoint has been dropped and the driver is draining, but the OS may take a few more milliseconds to free the port. Code that needs to rebind the same port immediately (e.g. restarting a bridge in a test) should retry the bind briefly. The reconnection integration test demonstrates this.
 
 ## Operational Notes
 

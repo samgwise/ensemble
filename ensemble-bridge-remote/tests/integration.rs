@@ -350,3 +350,114 @@ async fn mesh_topology_forwards_to_multiple_peers() {
     bridge_b.shutdown().await;
     bridge_c.shutdown().await;
 }
+
+#[tokio::test]
+async fn reconnection_resumes_after_peer_restart() {
+    let port_a = start_hub().await;
+    let port_b = start_hub().await;
+
+    // Bridge A listens on an ephemeral port that we will rebind after restart.
+    let bridge_a = start_bridge(make_config(
+        "bridge-a",
+        port_a,
+        0,
+        vec![],
+        vec![both_mapping("/local/**", "/remote/**")],
+    ))
+    .await
+    .expect("start bridge a");
+    let listen_port = bridge_a.listen_port;
+
+    // Bridge B connects to A and is configured to reconnect on drop.
+    let bridge_b = start_bridge(make_config(
+        "bridge-b",
+        port_b,
+        0,
+        vec![peer("127.0.0.1", listen_port)],
+        vec![both_mapping("/remote/**", "/local/**")],
+    ))
+    .await
+    .expect("start bridge b");
+
+    let client_a = Hub::connect(port_a, "client-a").await.expect("connect a");
+    let mut client_b = Hub::connect(port_b, "client-b").await.expect("connect b");
+
+    client_a.subscribe("/local/**").await.unwrap();
+    client_b.subscribe("/local/**").await.unwrap();
+
+    wait_for_bridge_ready().await;
+
+    // Forwarding works before the restart.
+    client_a
+        .send_action(action(
+            "/local/event",
+            SignalType::Event,
+            0.0,
+            Value::Integer(1),
+        ))
+        .await
+        .unwrap();
+    let first = recv_action(&mut client_b, 2000)
+        .await
+        .expect("client b should receive first event");
+    assert_eq!(
+        get_string(&payload_map(&first), "address").unwrap(),
+        "/local/event"
+    );
+
+    // Restart bridge A on the same port. Graceful shutdown drops the QUIC
+    // endpoint, but the OS releases the UDP socket asynchronously (a quinn
+    // driver task closes it shortly after the drop), so retry the rebind until
+    // the port is free.
+    bridge_a.shutdown().await;
+
+    let bridge_a2 = {
+        let mut handle = None;
+        for _ in 0..30 {
+            match start_bridge(make_config(
+                "bridge-a",
+                port_a,
+                listen_port,
+                vec![],
+                vec![both_mapping("/local/**", "/remote/**")],
+            ))
+            .await
+            {
+                Ok(h) => {
+                    handle = Some(h);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+        handle.expect("restart bridge a on same port")
+    };
+
+    // Bridge B reconnects with exponential backoff (first retry ~2s). Probe
+    // with actions until one is delivered, which means B has reconnected and
+    // forwarding has resumed.
+    let mut second = None;
+    for _ in 0..30 {
+        client_a
+            .send_action(action(
+                "/local/event",
+                SignalType::Event,
+                0.0,
+                Value::Integer(2),
+            ))
+            .await
+            .unwrap();
+        if let Some(msg) = recv_action(&mut client_b, 300).await {
+            second = Some(msg);
+            break;
+        }
+    }
+    let second = second.expect("client b should receive event after reconnect");
+    assert_eq!(
+        get_string(&payload_map(&second), "address").unwrap(),
+        "/local/event"
+    );
+
+    bridge_a2.shutdown().await;
+    bridge_b.shutdown().await;
+}

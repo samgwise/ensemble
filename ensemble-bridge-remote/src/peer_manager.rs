@@ -1,7 +1,9 @@
 //! Peer lifecycle manager for the remote bridge.
 //!
 //! Owns outbound peer connection attempts, inbound peer registration, active
-//! session tracking, and reconnection with exponential backoff.
+//! session tracking, and reconnection with exponential backoff. All spawned
+//! work is tracked through a shared `TaskTracker` and honours a shared
+//! `CancellationToken` so the bridge can shut down cleanly.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -10,6 +12,8 @@ use std::time::Duration;
 use ensemble_core::protocol::WireMessage;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::config::PeerConfig;
 use crate::loop_guard::LoopGuard;
@@ -38,6 +42,10 @@ struct PeerManagerInner {
     param_cache: ParamCache,
     active: Mutex<HashSet<String>>,
     attempts: Mutex<HashMap<String, u32>>,
+    /// Shared cancellation token; triggered on bridge shutdown.
+    cancel: CancellationToken,
+    /// Tracks every spawned task so shutdown can wait for all of them.
+    tracker: TaskTracker,
 }
 
 enum PeerEvent {
@@ -49,6 +57,10 @@ enum PeerEvent {
 
 impl PeerManager {
     /// Create a new peer manager.
+    ///
+    /// `cancel` and `tracker` are shared with the rest of the bridge so that
+    /// every spawned session participates in graceful shutdown.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         configs: Vec<PeerConfig>,
         bridge_name: String,
@@ -57,6 +69,8 @@ impl PeerManager {
         sink: Arc<HubSink>,
         outbound_tx: broadcast::Sender<WireMessage>,
         param_cache: ParamCache,
+        cancel: CancellationToken,
+        tracker: TaskTracker,
     ) -> Self {
         let (events_tx, events_rx) = mpsc::channel(100);
         let inner = Arc::new(PeerManagerInner {
@@ -70,6 +84,8 @@ impl PeerManager {
             param_cache,
             active: Mutex::new(HashSet::new()),
             attempts: Mutex::new(HashMap::new()),
+            cancel,
+            tracker,
         });
         Self {
             inner,
@@ -79,7 +95,8 @@ impl PeerManager {
 
     /// Run the peer manager event loop.
     ///
-    /// This consumes the manager and loops until the event channel closes.
+    /// This consumes the manager and loops until the event channel closes or
+    /// the shared cancellation token is triggered.
     pub async fn run(mut self) {
         let mut events = self.events_rx.take().expect("event receiver already taken");
 
@@ -89,8 +106,16 @@ impl PeerManager {
             self.spawn_outbound_attempt(config, 0);
         }
 
-        while let Some(event) = events.recv().await {
-            self.handle_event(event).await;
+        loop {
+            tokio::select! {
+                event = events.recv() => {
+                    match event {
+                        Some(event) => self.handle_event(event).await,
+                        None => break,
+                    }
+                }
+                _ = self.inner.cancel.cancelled() => break,
+            }
         }
     }
 
@@ -105,11 +130,15 @@ impl PeerManager {
 
     fn spawn_outbound_attempt(&self, config: PeerConfig, attempt: u32) {
         let inner = self.inner.clone();
+        let tracker = inner.tracker.clone();
         let config_key = format!("{}:{}", config.host, config.port);
 
-        tokio::spawn(async move {
+        tracker.spawn(async move {
             if attempt > 0 {
-                sleep(backoff_delay(attempt)).await;
+                tokio::select! {
+                    _ = sleep(backoff_delay(attempt)) => {}
+                    _ = inner.cancel.cancelled() => return,
+                }
             }
 
             match remote_peer::connect_to_peer(&config).await {
@@ -172,7 +201,8 @@ impl PeerManagerHandle {
     /// Register an inbound peer connection and start its managed session.
     pub fn register_inbound(&self, peer: RemotePeer) {
         let inner = self.inner.clone();
-        tokio::spawn(async move {
+        let tracker = inner.tracker.clone();
+        tracker.spawn(async move {
             inner.run_managed_session(peer, None, 0).await;
         });
     }
@@ -250,13 +280,13 @@ impl PeerManagerInner {
             let cache = self.param_cache.clone();
             let engine = self.engine.clone();
             let origin = self.guard.bridge_id().to_string();
-            tokio::spawn(async move {
+            self.tracker.spawn(async move {
                 cache.replay(&engine, &origin, replay_tx).await;
             });
         }
         // If replay is disabled, the sender is dropped and the peer receives no replay.
 
-        // Run the peer session until the connection drops.
+        // Run the peer session until the connection drops or the bridge shuts down.
         let outbound_rx = self.outbound_tx.subscribe();
         remote_peer::run_peer_session(
             peer,
@@ -268,6 +298,7 @@ impl PeerManagerInner {
             self.sink.clone(),
             outbound_rx,
             replay_rx,
+            self.cancel.clone(),
         )
         .await;
 

@@ -14,6 +14,8 @@ use ensemble_core::protocol::*;
 use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{broadcast, mpsc};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::config::PeerConfig;
 use crate::loop_guard::LoopGuard;
@@ -140,9 +142,16 @@ pub struct PeerInfo {
 
 /// Start a QUIC listener on the specified port.
 ///
-/// Returns the actual port bound to. The accept loop runs in a spawned task,
-/// so this returns immediately once the endpoint is bound.
-pub async fn start_listener(port: u16, inbound_tx: mpsc::Sender<RemotePeer>) -> Result<u16> {
+/// Returns the actual port bound to. The accept loop is spawned through the
+/// provided `TaskTracker` and returns immediately once the endpoint is bound.
+/// When `cancel` is triggered, the listener stops accepting and the endpoint
+/// is dropped, releasing the UDP socket and closing all connections on it.
+pub async fn start_listener(
+    port: u16,
+    inbound_tx: mpsc::Sender<RemotePeer>,
+    cancel: CancellationToken,
+    tracker: TaskTracker,
+) -> Result<u16> {
     let server_config = create_server_config()?;
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse()?;
 
@@ -152,32 +161,50 @@ pub async fn start_listener(port: u16, inbound_tx: mpsc::Sender<RemotePeer>) -> 
     eprintln!("QUIC listener ready on {}", endpoint.local_addr()?);
 
     // Accept incoming connections.
-    tokio::spawn(async move {
-        while let Some(incoming) = endpoint.accept().await {
-            let inbound_tx = inbound_tx.clone();
+    tracker.spawn(async move {
+        loop {
+            tokio::select! {
+                incoming = endpoint.accept() => {
+                    match incoming {
+                        Some(incoming) => {
+                            let inbound_tx = inbound_tx.clone();
 
-            tokio::spawn(async move {
-                match incoming.await {
-                    Ok(connection) => {
-                        let addr = connection.remote_address();
-                        eprintln!("Inbound QUIC connection from {}", addr);
+                            tokio::spawn(async move {
+                                match incoming.await {
+                                    Ok(connection) => {
+                                        let addr = connection.remote_address();
+                                        eprintln!("Inbound QUIC connection from {}", addr);
 
-                        let peer = RemotePeer {
-                            connection,
-                            addr,
-                            is_inbound: true,
-                        };
+                                        let peer = RemotePeer {
+                                            connection,
+                                            addr,
+                                            is_inbound: true,
+                                        };
 
-                        if let Err(e) = inbound_tx.send(peer).await {
-                            eprintln!("Failed to register inbound peer: {}", e);
+                                        if let Err(e) = inbound_tx.send(peer).await {
+                                            eprintln!("Failed to register inbound peer: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to accept QUIC connection: {}", e);
+                                    }
+                                }
+                            });
                         }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to accept QUIC connection: {}", e);
+                        None => break,
                     }
                 }
-            });
+                _ = cancel.cancelled() => {
+                    eprintln!("QUIC listener shutting down");
+                    break;
+                }
+            }
         }
+        // Cease accepting and close any connections on this endpoint, then drop
+        // it so quinn's internal driver releases the UDP socket. (The kernel
+        // release is asynchronous; callers that need to rebind should retry.)
+        endpoint.close(0u32.into(), b"bridge shutdown");
+        drop(endpoint);
     });
 
     Ok(actual_port)
@@ -300,7 +327,10 @@ fn parse_peer_hello(
 /// Run a full peer session using the provided pre-handshaked streams.
 ///
 /// This function takes ownership of the connection and streams, and runs until
-/// the peer disconnects or an error occurs.
+/// the peer disconnects, an error occurs, or the `cancel` token is triggered
+/// (e.g. bridge shutdown). The writer and reader sub-tasks are awaited before
+/// returning, so the tracked session task does not complete until both have
+/// exited.
 ///
 /// The `replay_rx` channel receives param replay messages that should be sent
 /// to this peer before live outbound traffic (e.g. current param state when a
@@ -316,6 +346,7 @@ pub async fn run_peer_session(
     hub_sink: Arc<HubSink>,
     mut outbound_rx: broadcast::Receiver<WireMessage>,
     mut replay_rx: mpsc::Receiver<WireMessage>,
+    cancel: CancellationToken,
 ) {
     let addr = peer.addr;
     let connection = peer.connection;
@@ -325,6 +356,11 @@ pub async fn run_peer_session(
         addr, peer_info.name, peer_info.bridge_id
     );
 
+    // A child token scoped to this session: cancelling it stops the writer and
+    // reader sub-tasks without affecting the rest of the bridge, and a bridge
+    // shutdown (parent cancel) cascades here automatically.
+    let session_cancel = cancel.child_token();
+
     // Split the session into reader and writer tasks.
     let conn_writer = connection.clone();
     let conn_reader = connection.clone();
@@ -332,24 +368,36 @@ pub async fn run_peer_session(
     let engine_reader = engine.clone();
     let sink_reader = hub_sink.clone();
 
+    // Writer and reader sub-tasks are tracked in a JoinSet so we can wait for
+    // the first to finish, then cancel the session and join the rest — without
+    // re-polling a completed handle (which panics in current tokio).
+    let mut set = tokio::task::JoinSet::new();
+
     // Writer task: outbound broadcast + replay → QUIC stream + datagrams.
-    let writer_handle = tokio::spawn(async move {
+    let writer_cancel = session_cancel.clone();
+    set.spawn(async move {
         let mut replay_closed = false;
         loop {
             let msg = if replay_closed {
-                match outbound_rx.recv().await {
-                    Ok(msg) => msg,
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
-                        continue;
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        eprintln!("[peer {}] Outbound channel closed", addr);
-                        break;
+                tokio::select! {
+                    _ = writer_cancel.cancelled() => break,
+                    result = outbound_rx.recv() => {
+                        match result {
+                            Ok(msg) => msg,
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
+                                continue;
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                eprintln!("[peer {}] Outbound channel closed", addr);
+                                break;
+                            }
+                        }
                     }
                 }
             } else {
                 tokio::select! {
+                    _ = writer_cancel.cancelled() => break,
                     result = outbound_rx.recv() => {
                         match result {
                             Ok(msg) => msg,
@@ -405,33 +453,40 @@ pub async fn run_peer_session(
     });
 
     // Reader task: QUIC stream + datagrams → inbound to local hub.
-    let reader_handle = tokio::spawn(async move {
+    let reader_cancel = session_cancel.clone();
+    set.spawn(async move {
         // Spawn a sub-task for datagram reception.
         let sink_dgram = sink_reader.clone();
         let engine_dgram = engine_reader.clone();
         let lg_dgram = lg_reader.clone();
         let dgram_addr = addr;
+        let dgram_cancel = reader_cancel.clone();
         let dgram_handle = tokio::spawn(async move {
             loop {
-                match conn_reader.read_datagram().await {
-                    Ok(bytes) => match codec::decode_from_slice(&bytes) {
-                        Ok(msg) => {
-                            handle_inbound_message(
-                                msg,
-                                dgram_addr,
-                                &lg_dgram,
-                                &engine_dgram,
-                                &sink_dgram,
-                            )
-                            .await;
+                tokio::select! {
+                    _ = dgram_cancel.cancelled() => break,
+                    result = conn_reader.read_datagram() => {
+                        match result {
+                            Ok(bytes) => match codec::decode_from_slice(&bytes) {
+                                Ok(msg) => {
+                                    handle_inbound_message(
+                                        msg,
+                                        dgram_addr,
+                                        &lg_dgram,
+                                        &engine_dgram,
+                                        &sink_dgram,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => {
+                                    eprintln!("[peer {}] Datagram decode failed: {}", dgram_addr, e);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[peer {}] Datagram read failed: {}", dgram_addr, e);
+                                break;
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("[peer {}] Datagram decode failed: {}", dgram_addr, e);
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("[peer {}] Datagram read failed: {}", dgram_addr, e);
-                        break;
                     }
                 }
             }
@@ -439,18 +494,23 @@ pub async fn run_peer_session(
 
         // Read reliable messages from the bidirectional stream.
         loop {
-            match codec::read_message(&mut recv_stream).await {
-                Ok(msg) => {
-                    handle_inbound_message(msg, addr, &lg_reader, &engine_reader, &sink_reader)
-                        .await;
-                }
-                Err(codec::CodecError::ConnectionClosed) => {
-                    eprintln!("[peer {}] Stream closed", addr);
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("[peer {}] Stream read error: {}", addr, e);
-                    break;
+            tokio::select! {
+                _ = reader_cancel.cancelled() => break,
+                result = codec::read_message(&mut recv_stream) => {
+                    match result {
+                        Ok(msg) => {
+                            handle_inbound_message(msg, addr, &lg_reader, &engine_reader, &sink_reader)
+                                .await;
+                        }
+                        Err(codec::CodecError::ConnectionClosed) => {
+                            eprintln!("[peer {}] Stream closed", addr);
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("[peer {}] Stream read error: {}", addr, e);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -458,15 +518,13 @@ pub async fn run_peer_session(
         dgram_handle.abort();
     });
 
-    // Wait for either task to finish (peer disconnect).
-    tokio::select! {
-        _ = writer_handle => {
-            eprintln!("[peer {}] Writer finished", addr);
-        }
-        _ = reader_handle => {
-            eprintln!("[peer {}] Reader finished", addr);
-        }
-    }
+    // Wait for the first sub-task to finish (peer disconnect or shutdown),
+    // then cancel the session so the other stops, and join the remainder. The
+    // JoinSet drains both sub-tasks so the tracked session task does not return
+    // while a sub-task lingers, and it never re-polls a completed handle.
+    let _ = set.join_next().await;
+    session_cancel.cancel();
+    set.join_all().await;
 
     // Close the connection.
     connection.close(0u32.into(), b"session ended");

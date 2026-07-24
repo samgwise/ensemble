@@ -6,6 +6,8 @@ use anyhow::Result;
 use ensemble_core::protocol::*;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::config::Config;
 use crate::loop_guard::LoopGuard;
@@ -64,6 +66,11 @@ pub async fn run_bridge(
     eprintln!("Peers: {}", config.peer.len());
     eprintln!("Mapping rules: {}", config.mapping.len());
 
+    // Cancellation token and task tracker used to stop and await all spawned
+    // tasks on shutdown.
+    let cancel = CancellationToken::new();
+    let tracker = TaskTracker::new();
+
     // Initialise core components.
     let guard = Arc::new(LoopGuard::new());
     eprintln!("Bridge ID: {}", guard.bridge_id());
@@ -97,25 +104,43 @@ pub async fn run_bridge(
         hub_sink.clone(),
         outbound_tx.clone(),
         param_cache.clone(),
+        cancel.clone(),
+        tracker.clone(),
     );
     let manager_handle = manager.handle();
 
     // Start QUIC listener and register accepted peers with the manager.
     let (peer_tx, mut peer_rx) = mpsc::channel::<RemotePeer>(100);
-    let listener_port = remote_peer::start_listener(config.bridge.listen_port, peer_tx).await?;
+    let listener_port = remote_peer::start_listener(
+        config.bridge.listen_port,
+        peer_tx,
+        cancel.clone(),
+        tracker.clone(),
+    )
+    .await?;
     if let Some(tx) = ready_tx {
         let _ = tx.send(listener_port);
     }
 
+    // Register inbound peers with the manager until shutdown.
     let register_handle = manager_handle.clone();
-    tokio::spawn(async move {
-        while let Some(peer) = peer_rx.recv().await {
-            register_handle.register_inbound(peer);
+    let register_cancel = cancel.clone();
+    tracker.spawn(async move {
+        loop {
+            tokio::select! {
+                peer = peer_rx.recv() => {
+                    match peer {
+                        Some(peer) => register_handle.register_inbound(peer),
+                        None => break,
+                    }
+                }
+                _ = register_cancel.cancelled() => break,
+            }
         }
     });
 
     // Run the peer manager (initiates outbound connections and handles reconnects).
-    tokio::spawn(async move {
+    tracker.spawn(async move {
         manager.run().await;
     });
 
@@ -128,39 +153,59 @@ pub async fn run_bridge(
     let engine_for_hub = engine.clone();
     let outbound_tx_hub = outbound_tx.clone();
     let param_cache_hub = param_cache.clone();
-    tokio::spawn(async move {
-        while let Some(msg) = hub.recv_action().await {
-            match msg.msg_type.as_str() {
-                MSG_UNSET_PARAM => {
-                    if let Some(address) = crate::protocol::get_address(&msg) {
-                        param_cache_hub.remove(&address);
+    let hub_forward_cancel = cancel.clone();
+    tracker.spawn(async move {
+        loop {
+            tokio::select! {
+                msg = hub.recv_action() => {
+                    match msg {
+                        Some(msg) => match msg.msg_type.as_str() {
+                            MSG_UNSET_PARAM => {
+                                if let Some(address) = crate::protocol::get_address(&msg) {
+                                    param_cache_hub.remove(&address);
+                                }
+                            }
+                            MSG_ACTION => {
+                                param_cache_hub.update(&msg);
+                                if let Err(e) = crate::local_hub::forward_to_remote(
+                                    &msg,
+                                    &engine_for_hub,
+                                    &origin,
+                                    &outbound_tx_hub,
+                                )
+                                .await
+                                {
+                                    eprintln!("Error forwarding to remote: {}", e);
+                                }
+                            }
+                            other => {
+                                eprintln!("Unexpected message from local hub: {}", other);
+                            }
+                        }
+                        None => break,
                     }
                 }
-                MSG_ACTION => {
-                    param_cache_hub.update(&msg);
-                    if let Err(e) = crate::local_hub::forward_to_remote(
-                        &msg,
-                        &engine_for_hub,
-                        &origin,
-                        &outbound_tx_hub,
-                    )
-                    .await
-                    {
-                        eprintln!("Error forwarding to remote: {}", e);
-                    }
-                }
-                other => {
-                    eprintln!("Unexpected message from local hub: {}", other);
-                }
+                _ = hub_forward_cancel.cancelled() => break,
             }
         }
     });
 
     // Forward inbound actions from peers to local hub.
-    tokio::spawn(async move {
-        while let Some(action) = inbound_rx.recv().await {
-            if let Err(e) = hub_sender.send(action).await {
-                eprintln!("Error sending to local hub: {}", e);
+    let inbound_forward_cancel = cancel.clone();
+    tracker.spawn(async move {
+        loop {
+            tokio::select! {
+                action = inbound_rx.recv() => {
+                    match action {
+                        Some(action) => {
+                            if let Err(e) = hub_sender.send(action).await {
+                                eprintln!("Error sending to local hub: {}", e);
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                _ = inbound_forward_cancel.cancelled() => break,
             }
         }
     });
@@ -180,6 +225,13 @@ pub async fn run_bridge(
         }
     }
     eprintln!("Shutting down.");
+
+    // Signal every spawned task to stop, then wait for all of them — including
+    // the QUIC listener, which drops the endpoint and releases the UDP port —
+    // to finish before returning.
+    cancel.cancel();
+    tracker.close();
+    tracker.wait().await;
 
     Ok(())
 }
