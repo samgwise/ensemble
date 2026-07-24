@@ -1,0 +1,28 @@
+[package]
+name = "ensemble-bridge-remote"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hub-to-hub bridge for connecting Ensemble instances over IP with QUIC"
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords = ["ensemble", "bridge", "quic", "networking", "real-time"]
+categories = ["multimedia::audio", "network-programming"]
+
+[dependencies]
+ensemble-values = { path = "../ensemble-values", version = "0.1.0" }
+ensemble-client = { path = "../ensemble-client", version = "0.1.0" }
+ensemble-core = { path = "../ensemble-core", version = "0.1.0" }
+ensemble-protocol = { path = "../ensemble-protocol", version = "0.1.0" }
+ensemble-routing = { path = "../ensemble-routing", version = "0.1.0" }
+ensemble-clock = { path = "../ensemble-clock", version = "0.1.0" }
+ensemble-discovery = { path = "../ensemble-discovery", version = "0.1.0" }
+tokio = { version = "1", features = ["full"] }
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
+rcgen = "0.14"
+anyhow = "1"

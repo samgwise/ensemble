@@ -1,0 +1,58 @@
+# Example configuration for ensemble-bridge-remote
+# Copy this file to bridge-remote.toml and adjust for your setup.
+
+[bridge]
+# Display name for this bridge (shown in the hub).
+name = "site-a-bridge"
+
+# Port to listen on for inbound QUIC connections from remote bridges.
+listen_port = 7400
+
+[local]
+# Optional: explicit local hub port. If omitted, uses discovery.
+# port = 7331
+
+# Remote peers to connect to (outbound connections).
+# Each peer is another ensemble-bridge-remote instance.
+[[peer]]
+host = "192.168.1.100"
+port = 7400
+reconnect = true
+
+[[peer]]
+host = "10.0.0.50"
+port = 7400
+reconnect = true
+
+# Address mapping rules.
+# Each rule maps addresses between local and remote hubs.
+#
+# from_pattern: Ensemble routing pattern (supports *, **, {capture})
+# to_template: Output address template (use {capture} and ** for passthrough)
+# direction: "outbound" (local→remote), "inbound" (remote→local), or "both"
+# signal_filter: optional list of signal types to match (e.g. ["param", "stream"])
+
+[[mapping]]
+# Forward all transport messages bidirectionally.
+from_pattern = "/transport/**"
+to_template = "/remote/transport/**"
+direction = "both"
+
+[[mapping]]
+# Map track volume controls from local to remote.
+from_pattern = "/track/{id}/volume"
+to_template = "/mixer/{id}/gain"
+direction = "outbound"
+
+[[mapping]]
+# Map sensor data from remote to local, only for param and stream signals.
+from_pattern = "/sensor/{name}"
+to_template = "/input/{name}"
+direction = "inbound"
+signal_filter = ["param", "stream"]
+
+[[mapping]]
+# Exact address mapping.
+from_pattern = "/clock"
+to_template = "/remote/clock"
+direction = "both"

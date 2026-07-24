@@ -16,6 +16,7 @@ members = [
     "ensemble-conformance",
     "ensemble-demo-euclidean",
     "ensemble-demo-pitch-cycler",
+    "ensemble-bridge-remote",
 ]
 resolver = "2"
 

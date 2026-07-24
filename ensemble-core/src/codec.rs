@@ -38,6 +38,18 @@ pub async fn write_message<W: AsyncWriteExt + Unpin>(
     Ok(())
 }
 
+/// Encode a message to MessagePack bytes (no length prefix).
+/// Useful for datagram transport where each datagram is self-framing.
+pub fn encode_to_vec(msg: &WireMessage) -> Result<Vec<u8>, CodecError> {
+    Ok(rmp_serde::to_vec_named(msg)?)
+}
+
+/// Decode a message from MessagePack bytes (no length prefix).
+/// Useful for datagram transport where each datagram is self-framing.
+pub fn decode_from_slice(bytes: &[u8]) -> Result<WireMessage, CodecError> {
+    Ok(rmp_serde::from_slice(bytes)?)
+}
+
 /// Read a length-prefixed MessagePack frame and decode it as a WireMessage.
 /// Returns `None` if the connection was cleanly closed (EOF on length read).
 pub async fn read_message<R: AsyncReadExt + Unpin>(
