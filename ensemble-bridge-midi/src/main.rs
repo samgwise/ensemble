@@ -211,65 +211,67 @@ fn spawn_midi_input(port_index: usize, hub_tx: mpsc::Sender<WireMessage>) -> any
     eprintln!("MIDI input: opening port {port_index} ({port_name})");
 
     // midir callback runs on its own thread.
-    let _conn = midi_in.connect(
-        port,
-        "ensemble-bridge-midi-in",
-        move |_timestamp, message, tx| {
-            if message.len() < 2 {
-                return;
-            }
-            let status = message[0] & 0xF0;
-            let channel = message[0] & 0x0F;
+    let _conn = midi_in
+        .connect(
+            port,
+            "ensemble-bridge-midi-in",
+            move |_timestamp, message, tx| {
+                if message.len() < 2 {
+                    return;
+                }
+                let status = message[0] & 0xF0;
+                let channel = message[0] & 0x0F;
 
-            let msg = match status {
-                0x90 if message.len() >= 3 && message[2] > 0 => {
-                    // Note-on (velocity > 0). We send as an Event — the receiving
-                    // tool decides duration.
-                    Some(action(
-                        "/midi/in/note-on",
-                        SignalType::Event,
-                        0.0,
-                        Value::Tuple(vec![
-                            Value::Integer(channel as i64),
-                            Value::Integer(message[1] as i64),
-                            Value::Integer(message[2] as i64),
-                        ]),
-                    ))
-                }
-                0x80 | 0x90 => {
-                    // Note-off (or note-on with velocity 0).
-                    Some(action(
-                        "/midi/in/note-off",
-                        SignalType::Event,
-                        0.0,
-                        Value::Tuple(vec![
-                            Value::Integer(channel as i64),
-                            Value::Integer(message[1] as i64),
-                        ]),
-                    ))
-                }
-                0xB0 if message.len() >= 3 => {
-                    // CC.
-                    Some(action(
-                        "/midi/in/cc",
-                        SignalType::Event,
-                        0.0,
-                        Value::Tuple(vec![
-                            Value::Integer(channel as i64),
-                            Value::Integer(message[1] as i64),
-                            Value::Integer(message[2] as i64),
-                        ]),
-                    ))
-                }
-                _ => None,
-            };
+                let msg = match status {
+                    0x90 if message.len() >= 3 && message[2] > 0 => {
+                        // Note-on (velocity > 0). We send as an Event — the receiving
+                        // tool decides duration.
+                        Some(action(
+                            "/midi/in/note-on",
+                            SignalType::Event,
+                            0.0,
+                            Value::Tuple(vec![
+                                Value::Integer(channel as i64),
+                                Value::Integer(message[1] as i64),
+                                Value::Integer(message[2] as i64),
+                            ]),
+                        ))
+                    }
+                    0x80 | 0x90 => {
+                        // Note-off (or note-on with velocity 0).
+                        Some(action(
+                            "/midi/in/note-off",
+                            SignalType::Event,
+                            0.0,
+                            Value::Tuple(vec![
+                                Value::Integer(channel as i64),
+                                Value::Integer(message[1] as i64),
+                            ]),
+                        ))
+                    }
+                    0xB0 if message.len() >= 3 => {
+                        // CC.
+                        Some(action(
+                            "/midi/in/cc",
+                            SignalType::Event,
+                            0.0,
+                            Value::Tuple(vec![
+                                Value::Integer(channel as i64),
+                                Value::Integer(message[1] as i64),
+                                Value::Integer(message[2] as i64),
+                            ]),
+                        ))
+                    }
+                    _ => None,
+                };
 
-            if let Some(msg) = msg {
-                let _ = tx.try_send(msg);
-            }
-        },
-        hub_tx,
-    )?;
+                if let Some(msg) = msg {
+                    let _ = tx.try_send(msg);
+                }
+            },
+            hub_tx,
+        )
+        .map_err(|e| anyhow::anyhow!("MIDI input connection failed: {}", e))?;
 
     // Keep the connection alive by leaking it (it lives for the process lifetime).
     // midir drops the connection when the MidiInputConnection is dropped.
@@ -352,7 +354,9 @@ async fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No MIDI output port at index {out_idx}"))?;
     let out_name = midi_out.port_name(out_port).unwrap_or_default();
     eprintln!("Opening MIDI output: {out_idx} ({out_name})");
-    let conn_out = midi_out.connect(out_port, "ensemble-bridge-midi")?;
+    let conn_out = midi_out
+        .connect(out_port, "ensemble-bridge-midi")
+        .map_err(|e| anyhow::anyhow!("MIDI output connection failed: {}", e))?;
     let midi_tx = spawn_midi_output(conn_out);
 
     // Connect to hub — use discovery when no explicit port is given.
