@@ -335,6 +335,65 @@ Ensemble's design is informed by several existing systems:
 - **[midi_sender](https://github.com/samgwise/midi_sender)** — the MIDI bridge's play-with-duration and mutex-based cancel pattern is adapted from this project.
 - **[OSC](https://opensoundcontrol.stanford.edu/)** — the hierarchical address pattern scheme follows OSC conventions.
 
+## Development & Contributing
+
+### Running CI checks locally
+
+The GitHub Actions CI pipeline runs the following checks on every push and pull request. You can run them locally to catch issues before pushing.
+
+**Run all tests** (must use `--test-threads=1` as discovery tests use process-global environment variables):
+
+```sh
+cargo test --workspace -- --test-threads=1
+```
+
+**Check formatting:**
+
+```sh
+cargo fmt --all -- --check
+```
+
+**Run clippy (lint):**
+
+```sh
+cargo clippy --workspace -- -D warnings
+```
+
+**Publish dry-run** (verifies all crates are ready for crates.io):
+
+```sh
+cargo publish --dry-run -p ensemble-values
+cargo publish --dry-run -p ensemble-routing
+# ... etc, in dependency order
+```
+
+### CI pipeline
+
+The CI workflow (`.github/workflows/ci.yml`) runs four jobs on every PR targeting `main`:
+
+- **Test** — builds and tests the workspace on Ubuntu, macOS, and Windows
+- **Lint** — runs `cargo fmt --check` and `cargo clippy -- -D warnings`
+- **SemVer Checks** — runs `cargo semver-checks check-release` to catch accidental breaking API changes (PRs only)
+- **Publish Dry Run** — runs `cargo publish --dry-run` for each crate in dependency order
+
+A release workflow (`.github/workflows/release.yml`) is triggered by pushing a `v*` tag. It runs the full test suite, publishes all 13 crates to crates.io in dependency order, and creates a GitHub release.
+
+### Linux build dependencies
+
+On Linux, the MIDI bridge requires ALSA development libraries:
+
+```sh
+sudo apt-get install libasound2-dev
+```
+
+### Publishing a release
+
+1. Ensure all CI checks pass locally
+2. Run `cargo release 0.1.0 --workspace` (or the next version)
+3. This updates versions, creates a git tag, and publishes to crates.io
+
+Note: crates.io has a rate limit of 5 new crates per 10 minutes. The first release may require waiting between batches.
+
 ## Licence
 
 MIT
