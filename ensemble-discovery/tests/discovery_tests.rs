@@ -98,8 +98,12 @@ fn port_file_path_linux_fallback() {
     env::remove_var("XDG_RUNTIME_DIR");
 
     let path = discovery::get_port_file_path();
-    assert!(path.starts_with("/tmp/ensemble-hub-"));
-    assert!(path.as_os_str().to_string_lossy().ends_with(".port"));
+    let path_str = path.to_string_lossy();
+    assert!(
+        path_str.starts_with("/tmp/ensemble-hub-") && path_str.ends_with(".port"),
+        "expected /tmp/ensemble-hub-<uid>.port, got {}",
+        path_str
+    );
 }
 
 #[test]
