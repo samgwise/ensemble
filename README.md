@@ -376,7 +376,7 @@ The CI workflow (`.github/workflows/ci.yml`) runs four jobs on every PR targetin
 - **SemVer Checks** — runs `cargo semver-checks check-release` to catch accidental breaking API changes (PRs only)
 - **Publish Dry Run** — runs `cargo publish --dry-run` for each crate in dependency order
 
-A release workflow (`.github/workflows/release.yml`) is triggered by pushing a `v*` tag. It runs the full test suite, publishes all 13 crates to crates.io in dependency order, and creates a GitHub release.
+A release workflow (`.github/workflows/release.yml`) is triggered by pushing a crate-specific tag (e.g., `ensemble-core-v0.1.0`). It runs the full test suite, publishes the tagged crate to crates.io, and creates a GitHub release.
 
 ### Linux build dependencies
 
@@ -388,11 +388,15 @@ sudo apt-get install libasound2-dev
 
 ### Publishing a release
 
-1. Ensure all CI checks pass locally
-2. Run `cargo release 0.1.0 --workspace` (or the next version)
-3. This updates versions, creates a git tag, and publishes to crates.io
+Each crate is versioned independently. To release a specific crate:
 
-Note: crates.io has a rate limit of 5 new crates per 10 minutes. The first release may require waiting between batches.
+1. Ensure all CI checks pass locally
+2. Run `cargo release <version> -p <crate-name>` (e.g., `cargo release 0.2.0 -p ensemble-hub`)
+3. This updates the crate's version, creates a git tag (e.g., `ensemble-hub-v0.2.0`), and publishes to crates.io
+
+The release workflow is triggered by pushing a tag matching `*-v*` (e.g., `ensemble-core-v0.1.0`). It runs the full test suite, publishes the specific crate to crates.io, and creates a GitHub release.
+
+To release multiple crates, repeat the process for each one. Dependencies must be published before dependents — for example, if you update `ensemble-core`, publish it before publishing `ensemble-client` which depends on it.
 
 ## Licence
 
