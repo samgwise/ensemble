@@ -11,18 +11,20 @@ mod config;
 mod local_hub;
 mod loop_guard;
 mod mapping;
+mod param_cache;
 mod peer_manager;
 mod protocol;
 mod remote_peer;
 
-use std::sync::Arc;
-use anyhow::Result;
 use crate::config::Config;
+use crate::param_cache::ParamCache;
 use crate::peer_manager::PeerManager;
+use anyhow::Result;
 use ensemble_core::protocol::*;
 use loop_guard::LoopGuard;
 use mapping::MappingEngine;
 use remote_peer::HubSink;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
 #[tokio::main]
@@ -51,17 +53,20 @@ async fn main() -> Result<()> {
 
     // Connect to local hub.
     let mut hub = local_hub::connect_to_hub(&config.local, &config.bridge.name).await?;
-    
+
     // Subscribe to outbound patterns.
     local_hub::subscribe_to_patterns(&hub, &engine).await?;
-    
+
     // Create broadcast channel for outbound actions (local hub → all remote peers).
     let (outbound_tx, _) = broadcast::channel::<WireMessage>(1000);
-    
+
     // Create channel for inbound actions (remote peers → local hub).
     let (inbound_tx, mut inbound_rx) = mpsc::channel::<WireMessage>(1000);
     let hub_sink = Arc::new(HubSink { tx: inbound_tx });
-    
+
+    // Cache of current param values for replay to newly connected peers.
+    let param_cache = ParamCache::new();
+
     // Create the peer manager to orchestrate inbound and outbound connections.
     let manager = PeerManager::new(
         config.peer.clone(),
@@ -70,6 +75,7 @@ async fn main() -> Result<()> {
         engine.clone(),
         hub_sink.clone(),
         outbound_tx.clone(),
+        param_cache.clone(),
     );
     let manager_handle = manager.handle();
 
@@ -95,14 +101,36 @@ async fn main() -> Result<()> {
     // Get a sender clone for sending actions back to the hub.
     let hub_sender = hub.sender();
 
-    // Spawn task to forward actions from local hub to broadcast (→ all peers).
+    // Spawn task to forward actions from local hub to broadcast (→ all peers),
+    // keeping the param cache up to date for future peer replays.
     let origin = guard.bridge_id().to_string();
     let engine_for_hub = engine.clone();
     let outbound_tx_hub = outbound_tx.clone();
+    let param_cache_hub = param_cache.clone();
     tokio::spawn(async move {
-        while let Some(action) = hub.recv_action().await {
-            if let Err(e) = local_hub::forward_to_remote(&action, &engine_for_hub, &origin, &outbound_tx_hub).await {
-                eprintln!("Error forwarding to remote: {}", e);
+        while let Some(msg) = hub.recv_action().await {
+            match msg.msg_type.as_str() {
+                MSG_UNSET_PARAM => {
+                    if let Some(address) = protocol::get_address(&msg) {
+                        param_cache_hub.remove(&address);
+                    }
+                }
+                MSG_ACTION => {
+                    param_cache_hub.update(&msg);
+                    if let Err(e) = local_hub::forward_to_remote(
+                        &msg,
+                        &engine_for_hub,
+                        &origin,
+                        &outbound_tx_hub,
+                    )
+                    .await
+                    {
+                        eprintln!("Error forwarding to remote: {}", e);
+                    }
+                }
+                other => {
+                    eprintln!("Unexpected message from local hub: {}", other);
+                }
             }
         }
     });

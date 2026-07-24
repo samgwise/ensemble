@@ -226,6 +226,11 @@ impl Hub {
                             MSG_ACTION => {
                                 let _ = action_tx.send(msg).await;
                             }
+                            // Forward unset_param so consumers (e.g. the remote bridge)
+                            // can keep their local param cache in sync with the hub.
+                            MSG_UNSET_PARAM => {
+                                let _ = action_tx.send(msg).await;
+                            }
                             MSG_ERROR => {
                                 // Log errors but continue (could be non-fatal)
                                 eprintln!("Hub error: {:?}", msg.payload);

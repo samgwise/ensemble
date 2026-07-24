@@ -14,6 +14,7 @@ use tokio::time::sleep;
 use crate::config::PeerConfig;
 use crate::loop_guard::LoopGuard;
 use crate::mapping::MappingEngine;
+use crate::param_cache::ParamCache;
 use crate::remote_peer::{self, HubSink, RemotePeer};
 
 /// Manages the lifecycle of remote peer connections.
@@ -34,6 +35,7 @@ struct PeerManagerInner {
     sink: Arc<HubSink>,
     outbound_tx: broadcast::Sender<WireMessage>,
     events_tx: mpsc::Sender<PeerEvent>,
+    param_cache: ParamCache,
     active: Mutex<HashSet<String>>,
     attempts: Mutex<HashMap<String, u32>>,
 }
@@ -54,6 +56,7 @@ impl PeerManager {
         engine: Arc<MappingEngine>,
         sink: Arc<HubSink>,
         outbound_tx: broadcast::Sender<WireMessage>,
+        param_cache: ParamCache,
     ) -> Self {
         let (events_tx, events_rx) = mpsc::channel(100);
         let inner = Arc::new(PeerManagerInner {
@@ -64,10 +67,14 @@ impl PeerManager {
             sink,
             outbound_tx,
             events_tx,
+            param_cache,
             active: Mutex::new(HashSet::new()),
             attempts: Mutex::new(HashMap::new()),
         });
-        Self { inner, events_rx: Some(events_rx) }
+        Self {
+            inner,
+            events_rx: Some(events_rx),
+        }
     }
 
     /// Run the peer manager event loop.
@@ -91,7 +98,9 @@ impl PeerManager {
     ///
     /// The handle shares the same internal state but cannot run the event loop.
     pub fn handle(&self) -> PeerManagerHandle {
-        PeerManagerHandle { inner: self.inner.clone() }
+        PeerManagerHandle {
+            inner: self.inner.clone(),
+        }
     }
 
     fn spawn_outbound_attempt(&self, config: PeerConfig, attempt: u32) {
@@ -111,9 +120,12 @@ impl PeerManager {
                 }
                 Err(e) => {
                     eprintln!("[peer {}] Connection failed: {}", config_key, e);
-                    let _ = inner.events_tx.send(PeerEvent::SessionEnded {
-                        config_key: Some(config_key),
-                    }).await;
+                    let _ = inner
+                        .events_tx
+                        .send(PeerEvent::SessionEnded {
+                            config_key: Some(config_key),
+                        })
+                        .await;
                 }
             }
         });
@@ -124,13 +136,19 @@ impl PeerManager {
             PeerEvent::Connected { config_key } => {
                 self.inner.attempts.lock().unwrap().insert(config_key, 0);
             }
-            PeerEvent::SessionEnded { config_key: Some(key) } => {
-                if let Some(config) = self.inner.configs.iter().find(|c| {
-                    format!("{}:{}", c.host, c.port) == key
-                }) {
+            PeerEvent::SessionEnded {
+                config_key: Some(key),
+            } => {
+                if let Some(config) = self
+                    .inner
+                    .configs
+                    .iter()
+                    .find(|c| format!("{}:{}", c.host, c.port) == key)
+                {
                     if config.reconnect {
                         let mut attempts = self.inner.attempts.lock().unwrap();
-                        let next_attempt = attempts.get(&key).copied().unwrap_or(0).saturating_add(1);
+                        let next_attempt =
+                            attempts.get(&key).copied().unwrap_or(0).saturating_add(1);
                         attempts.insert(key.clone(), next_attempt);
                         drop(attempts);
                         self.spawn_outbound_attempt(config.clone(), next_attempt);
@@ -170,20 +188,18 @@ impl PeerManagerInner {
         let addr = peer.addr;
 
         // Perform handshake and identify the peer.
-        let (info, send_stream, recv_stream) = match remote_peer::handshake(
-            &peer,
-            self.guard.bridge_id(),
-            &self.bridge_name,
-        ).await {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("[peer {}] Handshake failed: {}", addr, e);
-                let _ = self.events_tx.send(PeerEvent::SessionEnded {
-                    config_key,
-                }).await;
-                return;
-            }
-        };
+        let (info, send_stream, recv_stream) =
+            match remote_peer::handshake(&peer, self.guard.bridge_id(), &self.bridge_name).await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("[peer {}] Handshake failed: {}", addr, e);
+                    let _ = self
+                        .events_tx
+                        .send(PeerEvent::SessionEnded { config_key })
+                        .await;
+                    return;
+                }
+            };
 
         // Reject duplicate connections to the same bridge.
         let is_duplicate = {
@@ -201,26 +217,44 @@ impl PeerManagerInner {
                 "[peer {}] Duplicate connection to {} ({}); closing",
                 addr,
                 info.bridge_id,
-                if peer.is_inbound { "inbound" } else { "outbound" }
+                if peer.is_inbound {
+                    "inbound"
+                } else {
+                    "outbound"
+                }
             );
             peer.connection.close(0u32.into(), b"duplicate connection");
-            let _ = self.events_tx.send(PeerEvent::SessionEnded {
-                config_key,
-            }).await;
+            let _ = self
+                .events_tx
+                .send(PeerEvent::SessionEnded { config_key })
+                .await;
             return;
         }
 
         // Notify the manager of a successful outbound handshake.
         if let Some(key) = config_key.clone() {
-            let _ = self.events_tx.send(PeerEvent::Connected {
-                config_key: key,
-            }).await;
+            let _ = self
+                .events_tx
+                .send(PeerEvent::Connected { config_key: key })
+                .await;
         }
 
         eprintln!(
             "[peer {}] Session active (bridge_id: {}, attempt {})",
             addr, info.bridge_id, attempt
         );
+
+        // Create a direct channel for param replay to this peer.
+        let (replay_tx, replay_rx) = mpsc::channel(100);
+        if self.should_replay_params(&config_key) {
+            let cache = self.param_cache.clone();
+            let engine = self.engine.clone();
+            let origin = self.guard.bridge_id().to_string();
+            tokio::spawn(async move {
+                cache.replay(&engine, &origin, replay_tx).await;
+            });
+        }
+        // If replay is disabled, the sender is dropped and the peer receives no replay.
 
         // Run the peer session until the connection drops.
         let outbound_rx = self.outbound_tx.subscribe();
@@ -233,13 +267,26 @@ impl PeerManagerInner {
             self.engine.clone(),
             self.sink.clone(),
             outbound_rx,
-        ).await;
+            replay_rx,
+        )
+        .await;
 
         // Remove from active sessions and notify the manager.
         self.active.lock().unwrap().remove(&info.bridge_id);
-        let _ = self.events_tx.send(PeerEvent::SessionEnded {
-            config_key,
-        }).await;
+        let _ = self
+            .events_tx
+            .send(PeerEvent::SessionEnded { config_key })
+            .await;
+    }
+
+    fn should_replay_params(&self, config_key: &Option<String>) -> bool {
+        match config_key {
+            None => true, // inbound peers default to replay enabled
+            Some(key) => self
+                .configs
+                .iter()
+                .any(|c| format!("{}:{}", c.host, c.port) == *key && c.replay_params),
+        }
     }
 }
 
@@ -277,8 +324,16 @@ mod tests {
     fn backoff_bounds() {
         for attempt in 0..20 {
             let delay = backoff_delay(attempt);
-            assert!(delay.as_secs() >= 1, "attempt {} yielded delay < 1s", attempt);
-            assert!(delay.as_secs() <= 30, "attempt {} yielded delay > 30s", attempt);
+            assert!(
+                delay.as_secs() >= 1,
+                "attempt {} yielded delay < 1s",
+                attempt
+            );
+            assert!(
+                delay.as_secs() <= 30,
+                "attempt {} yielded delay > 30s",
+                attempt
+            );
         }
     }
 }

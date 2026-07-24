@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use ensemble_core::codec;
 use ensemble_core::protocol::*;
-use quinn::{Connection, Endpoint, ServerConfig, ClientConfig};
+use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::sync::{broadcast, mpsc};
 
@@ -60,7 +60,9 @@ fn create_client_config() -> ClientConfig {
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
         .with_no_client_auth();
 
-    ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap()))
+    ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap(),
+    ))
 }
 
 /// Certificate verifier that accepts any certificate (for development).
@@ -137,15 +139,11 @@ pub struct PeerInfo {
 }
 
 /// Start a QUIC listener on the specified port.
-pub async fn start_listener(
-    port: u16,
-    inbound_tx: mpsc::Sender<RemotePeer>,
-) -> Result<()> {
+pub async fn start_listener(port: u16, inbound_tx: mpsc::Sender<RemotePeer>) -> Result<()> {
     let server_config = create_server_config()?;
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse()?;
 
-    let endpoint = Endpoint::server(server_config, addr)
-        .context("failed to bind QUIC endpoint")?;
+    let endpoint = Endpoint::server(server_config, addr).context("failed to bind QUIC endpoint")?;
 
     eprintln!("QUIC listener ready on {}", addr);
 
@@ -185,11 +183,12 @@ pub async fn connect_to_peer(peer_config: &PeerConfig) -> Result<RemotePeer> {
     let client_config = create_client_config();
 
     // Bind to any available local port.
-    let mut endpoint = Endpoint::client("0.0.0.0:0".parse()?)
-        .context("failed to create client endpoint")?;
+    let mut endpoint =
+        Endpoint::client("0.0.0.0:0".parse()?).context("failed to create client endpoint")?;
     endpoint.set_default_client_config(client_config);
 
-    let addr: SocketAddr = format!("{}:{}", peer_config.host, peer_config.port).parse()
+    let addr: SocketAddr = format!("{}:{}", peer_config.host, peer_config.port)
+        .parse()
         .context("invalid peer address")?;
 
     eprintln!("Connecting to peer at {}...", addr);
@@ -261,13 +260,24 @@ pub async fn handshake(
         _ => "unknown".to_string(),
     };
 
-    Ok((PeerInfo { bridge_id: peer_bridge_id, name: peer_name }, send_stream, recv_stream))
+    Ok((
+        PeerInfo {
+            bridge_id: peer_bridge_id,
+            name: peer_name,
+        },
+        send_stream,
+        recv_stream,
+    ))
 }
 
 /// Run a full peer session using the provided pre-handshaked streams.
 ///
 /// This function takes ownership of the connection and streams, and runs until
 /// the peer disconnects or an error occurs.
+///
+/// The `replay_rx` channel receives param replay messages that should be sent
+/// to this peer before live outbound traffic (e.g. current param state when a
+/// new peer connects).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_peer_session(
     peer: RemotePeer,
@@ -278,6 +288,7 @@ pub async fn run_peer_session(
     engine: Arc<MappingEngine>,
     hub_sink: Arc<HubSink>,
     mut outbound_rx: broadcast::Receiver<WireMessage>,
+    mut replay_rx: mpsc::Receiver<WireMessage>,
 ) {
     let addr = peer.addr;
     let connection = peer.connection;
@@ -294,41 +305,70 @@ pub async fn run_peer_session(
     let engine_reader = engine.clone();
     let sink_reader = hub_sink.clone();
 
-    // Writer task: outbound broadcast → QUIC stream + datagrams.
+    // Writer task: outbound broadcast + replay → QUIC stream + datagrams.
     let writer_handle = tokio::spawn(async move {
+        let mut replay_closed = false;
         loop {
-            match outbound_rx.recv().await {
-                Ok(msg) => {
-                    // Determine signal type for routing to stream vs datagram.
-                    let signal_type = protocol::get_signal_type(&msg)
-                        .unwrap_or_else(|| "event".to_string());
-
-                    if signal_type == "stream" {
-                        // Send as QUIC datagram (best-effort, lowest latency).
-                        match codec::encode_to_vec(&msg) {
-                            Ok(bytes) => {
-                                if let Err(e) = conn_writer.send_datagram(bytes.into()) {
-                                    eprintln!("[peer {}] Datagram send failed: {}", addr, e);
-                                    break;
-                                }
+            let msg = if replay_closed {
+                match outbound_rx.recv().await {
+                    Ok(msg) => msg,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        eprintln!("[peer {}] Outbound channel closed", addr);
+                        break;
+                    }
+                }
+            } else {
+                tokio::select! {
+                    result = outbound_rx.recv() => {
+                        match result {
+                            Ok(msg) => msg,
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
+                                continue;
                             }
-                            Err(e) => {
-                                eprintln!("[peer {}] Datagram encode failed: {}", addr, e);
+                            Err(broadcast::error::RecvError::Closed) => {
+                                eprintln!("[peer {}] Outbound channel closed", addr);
+                                break;
                             }
                         }
-                    } else {
-                        // Send on the reliable stream.
-                        if let Err(e) = codec::write_message(&mut send_stream, &msg).await {
-                            eprintln!("[peer {}] Stream write failed: {}", addr, e);
-                            break;
+                    }
+                    result = replay_rx.recv() => {
+                        match result {
+                            Some(msg) => msg,
+                            None => {
+                                replay_closed = true;
+                                continue;
+                            }
                         }
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
+            };
+
+            // Determine signal type for routing to stream vs datagram.
+            let signal_type =
+                protocol::get_signal_type(&msg).unwrap_or_else(|| "event".to_string());
+
+            if signal_type == "stream" {
+                // Send as QUIC datagram (best-effort, lowest latency).
+                match codec::encode_to_vec(&msg) {
+                    Ok(bytes) => {
+                        if let Err(e) = conn_writer.send_datagram(bytes.into()) {
+                            eprintln!("[peer {}] Datagram send failed: {}", addr, e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[peer {}] Datagram encode failed: {}", addr, e);
+                    }
                 }
-                Err(broadcast::error::RecvError::Closed) => {
-                    eprintln!("[peer {}] Outbound channel closed", addr);
+            } else {
+                // Send on the reliable stream.
+                if let Err(e) = codec::write_message(&mut send_stream, &msg).await {
+                    eprintln!("[peer {}] Stream write failed: {}", addr, e);
                     break;
                 }
             }
@@ -347,19 +387,21 @@ pub async fn run_peer_session(
         let dgram_handle = tokio::spawn(async move {
             loop {
                 match conn_reader.read_datagram().await {
-                    Ok(bytes) => {
-                        match codec::decode_from_slice(&bytes) {
-                            Ok(msg) => {
-                                handle_inbound_message(
-                                    msg, dgram_addr, &lg_dgram, &engine_dgram, &sink_dgram,
-                                )
-                                .await;
-                            }
-                            Err(e) => {
-                                eprintln!("[peer {}] Datagram decode failed: {}", dgram_addr, e);
-                            }
+                    Ok(bytes) => match codec::decode_from_slice(&bytes) {
+                        Ok(msg) => {
+                            handle_inbound_message(
+                                msg,
+                                dgram_addr,
+                                &lg_dgram,
+                                &engine_dgram,
+                                &sink_dgram,
+                            )
+                            .await;
                         }
-                    }
+                        Err(e) => {
+                            eprintln!("[peer {}] Datagram decode failed: {}", dgram_addr, e);
+                        }
+                    },
                     Err(e) => {
                         eprintln!("[peer {}] Datagram read failed: {}", dgram_addr, e);
                         break;
@@ -372,10 +414,8 @@ pub async fn run_peer_session(
         loop {
             match codec::read_message(&mut recv_stream).await {
                 Ok(msg) => {
-                    handle_inbound_message(
-                        msg, addr, &lg_reader, &engine_reader, &sink_reader,
-                    )
-                    .await;
+                    handle_inbound_message(msg, addr, &lg_reader, &engine_reader, &sink_reader)
+                        .await;
                 }
                 Err(codec::CodecError::ConnectionClosed) => {
                     eprintln!("[peer {}] Stream closed", addr);
@@ -419,17 +459,22 @@ async fn handle_inbound_message(
             // Check loop guard.
             if let Some(origin) = protocol::get_origin(&msg) {
                 if loop_guard.is_loop(&origin) {
-                    eprintln!("[peer {}] Dropping looped action (origin={})", peer_addr, origin);
+                    eprintln!(
+                        "[peer {}] Dropping looped action (origin={})",
+                        peer_addr, origin
+                    );
                     return;
                 }
             }
 
             // Map address and forward to local hub.
             let address = protocol::get_address(&msg).unwrap_or_default();
-            let signal_type_str = protocol::get_signal_type(&msg)
-                .unwrap_or_else(|| "event".to_string());
+            let signal_type_str =
+                protocol::get_signal_type(&msg).unwrap_or_else(|| "event".to_string());
 
-            if let Some(mapped_address) = engine.map(&address, Direction::Inbound, Some(&signal_type_str)) {
+            if let Some(mapped_address) =
+                engine.map(&address, Direction::Inbound, Some(&signal_type_str))
+            {
                 let source = protocol::get_source(&msg);
                 let timestamp = protocol::get_timestamp(&msg);
                 let payload = protocol::get_action_payload(&msg);
@@ -441,13 +486,8 @@ async fn handle_inbound_message(
                     _ => SignalType::Event,
                 };
 
-                let action = action_with_source(
-                    source,
-                    &mapped_address,
-                    signal_type,
-                    timestamp,
-                    payload,
-                );
+                let action =
+                    action_with_source(source, &mapped_address, signal_type, timestamp, payload);
 
                 eprintln!(
                     "[peer {}] Inbound: {} → {} (source={})",

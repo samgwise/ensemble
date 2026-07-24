@@ -251,11 +251,8 @@ mod tests {
 
     #[test]
     fn wildcard_passthrough() {
-        let engine = MappingEngine::new(&[make_rule(
-            "/transport/**",
-            "/remote/transport/**",
-            "both",
-        )]);
+        let engine =
+            MappingEngine::new(&[make_rule("/transport/**", "/remote/transport/**", "both")]);
         assert_eq!(
             engine.map("/transport/bpm", Direction::Outbound, None),
             Some("/remote/transport/bpm".to_string())
@@ -268,11 +265,7 @@ mod tests {
 
     #[test]
     fn direction_filtering() {
-        let engine = MappingEngine::new(&[make_rule(
-            "/sensor/{name}",
-            "/input/{name}",
-            "inbound",
-        )]);
+        let engine = MappingEngine::new(&[make_rule("/sensor/{name}", "/input/{name}", "inbound")]);
         // Inbound should match.
         assert_eq!(
             engine.map("/sensor/temp", Direction::Inbound, None),

@@ -46,6 +46,9 @@ pub struct PeerConfig {
     /// Whether to reconnect on disconnect.
     #[serde(default = "default_true")]
     pub reconnect: bool,
+    /// Whether to replay current param state to this peer after handshake.
+    #[serde(default = "default_true")]
+    pub replay_params: bool,
 }
 
 fn default_true() -> bool {
@@ -123,6 +126,7 @@ signal_filter = ["param"]
         assert_eq!(config.peer.len(), 1);
         assert_eq!(config.peer[0].host, "192.168.1.100");
         assert!(config.peer[0].reconnect);
+        assert!(config.peer[0].replay_params);
         assert_eq!(config.mapping.len(), 2);
         assert_eq!(config.mapping[0].direction, "both");
         assert_eq!(config.mapping[1].signal_filter, vec!["param"]);

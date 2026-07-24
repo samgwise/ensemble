@@ -167,7 +167,9 @@ mod tests {
         let msg = bridge_hello("abc-123", "test-bridge");
         let mut buf = Vec::new();
         codec::write_message(&mut buf, &msg).await.unwrap();
-        let decoded = codec::read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
+        let decoded = codec::read_message(&mut std::io::Cursor::new(buf))
+            .await
+            .unwrap();
         assert_eq!(decoded.msg_type, MSG_BRIDGE_HELLO);
         assert_eq!(get_origin(&decoded), None); // hello has no origin
     }
@@ -184,7 +186,9 @@ mod tests {
         );
         let mut buf = Vec::new();
         codec::write_message(&mut buf, &msg).await.unwrap();
-        let decoded = codec::read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
+        let decoded = codec::read_message(&mut std::io::Cursor::new(buf))
+            .await
+            .unwrap();
         assert_eq!(decoded.msg_type, MSG_BRIDGE_ACTION);
         assert_eq!(get_origin(&decoded), Some("bridge-aaa".to_string()));
         assert_eq!(get_address(&decoded), Some("/transport/bpm".to_string()));
@@ -197,7 +201,9 @@ mod tests {
         let msg = bridge_ping(7);
         let mut buf = Vec::new();
         codec::write_message(&mut buf, &msg).await.unwrap();
-        let decoded = codec::read_message(&mut std::io::Cursor::new(buf)).await.unwrap();
+        let decoded = codec::read_message(&mut std::io::Cursor::new(buf))
+            .await
+            .unwrap();
         assert_eq!(decoded.msg_type, MSG_BRIDGE_PING);
     }
 }
