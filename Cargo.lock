@@ -386,6 +386,7 @@ dependencies = [
  "ensemble-clock",
  "ensemble-core",
  "ensemble-discovery",
+ "ensemble-hub",
  "ensemble-protocol",
  "ensemble-routing",
  "ensemble-values",

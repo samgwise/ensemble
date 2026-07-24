@@ -139,42 +139,48 @@ pub struct PeerInfo {
 }
 
 /// Start a QUIC listener on the specified port.
-pub async fn start_listener(port: u16, inbound_tx: mpsc::Sender<RemotePeer>) -> Result<()> {
+///
+/// Returns the actual port bound to. The accept loop runs in a spawned task,
+/// so this returns immediately once the endpoint is bound.
+pub async fn start_listener(port: u16, inbound_tx: mpsc::Sender<RemotePeer>) -> Result<u16> {
     let server_config = create_server_config()?;
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse()?;
 
     let endpoint = Endpoint::server(server_config, addr).context("failed to bind QUIC endpoint")?;
+    let actual_port = endpoint.local_addr()?.port();
 
-    eprintln!("QUIC listener ready on {}", addr);
+    eprintln!("QUIC listener ready on {}", endpoint.local_addr()?);
 
     // Accept incoming connections.
-    while let Some(incoming) = endpoint.accept().await {
-        let inbound_tx = inbound_tx.clone();
+    tokio::spawn(async move {
+        while let Some(incoming) = endpoint.accept().await {
+            let inbound_tx = inbound_tx.clone();
 
-        tokio::spawn(async move {
-            match incoming.await {
-                Ok(connection) => {
-                    let addr = connection.remote_address();
-                    eprintln!("Inbound QUIC connection from {}", addr);
+            tokio::spawn(async move {
+                match incoming.await {
+                    Ok(connection) => {
+                        let addr = connection.remote_address();
+                        eprintln!("Inbound QUIC connection from {}", addr);
 
-                    let peer = RemotePeer {
-                        connection,
-                        addr,
-                        is_inbound: true,
-                    };
+                        let peer = RemotePeer {
+                            connection,
+                            addr,
+                            is_inbound: true,
+                        };
 
-                    if let Err(e) = inbound_tx.send(peer).await {
-                        eprintln!("Failed to register inbound peer: {}", e);
+                        if let Err(e) = inbound_tx.send(peer).await {
+                            eprintln!("Failed to register inbound peer: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to accept QUIC connection: {}", e);
                     }
                 }
-                Err(e) => {
-                    eprintln!("Failed to accept QUIC connection: {}", e);
-                }
-            }
-        });
-    }
+            });
+        }
+    });
 
-    Ok(())
+    Ok(actual_port)
 }
 
 /// Connect to a remote peer.
@@ -219,29 +225,51 @@ pub struct HubSink {
 
 /// Perform the bridge handshake on a new QUIC connection.
 ///
-/// Opens a bidirectional stream, sends the local bridge hello, and reads the
-/// peer's hello. Returns the peer's identifying information and the opened
-/// streams for the session.
+/// The outbound peer opens a bidirectional stream, sends its hello, and reads
+/// the peer's reply. The inbound peer accepts the incoming stream, reads the
+/// peer's hello, and replies. This avoids a deadlock where both sides open
+/// separate streams and wait for each other.
 pub async fn handshake(
     peer: &RemotePeer,
     local_bridge_id: &str,
     local_name: &str,
 ) -> Result<(PeerInfo, quinn::SendStream, quinn::RecvStream)> {
-    let (mut send_stream, mut recv_stream) = peer
+    let hello = protocol::bridge_hello(local_bridge_id, local_name);
+
+    if peer.is_inbound {
+        let (mut send, mut recv) = peer
+            .connection
+            .accept_bi()
+            .await
+            .context("failed to accept QUIC stream")?;
+        let peer_hello = codec::read_message(&mut recv)
+            .await
+            .context("failed to read bridge_hello")?;
+        codec::write_message(&mut send, &hello)
+            .await
+            .context("failed to send bridge_hello")?;
+        return parse_peer_hello(peer_hello, send, recv);
+    }
+
+    let (mut send, mut recv) = peer
         .connection
         .open_bi()
         .await
         .context("failed to open QUIC stream")?;
-
-    let hello = protocol::bridge_hello(local_bridge_id, local_name);
-    codec::write_message(&mut send_stream, &hello)
+    codec::write_message(&mut send, &hello)
         .await
         .context("failed to send bridge_hello")?;
-
-    let peer_hello = codec::read_message(&mut recv_stream)
+    let peer_hello = codec::read_message(&mut recv)
         .await
         .context("failed to read bridge_hello")?;
+    parse_peer_hello(peer_hello, send, recv)
+}
 
+fn parse_peer_hello(
+    peer_hello: WireMessage,
+    send_stream: quinn::SendStream,
+    recv_stream: quinn::RecvStream,
+) -> Result<(PeerInfo, quinn::SendStream, quinn::RecvStream)> {
     if peer_hello.msg_type != protocol::MSG_BRIDGE_HELLO {
         anyhow::bail!("expected bridge_hello, got {}", peer_hello.msg_type);
     }
@@ -269,7 +297,6 @@ pub async fn handshake(
         recv_stream,
     ))
 }
-
 /// Run a full peer session using the provided pre-handshaked streams.
 ///
 /// This function takes ownership of the connection and streams, and runs until

@@ -26,3 +26,7 @@ toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 rcgen = "0.14"
 anyhow = "1"
+
+[dev-dependencies]
+ensemble-hub = { path = "../ensemble-hub", version = "0.1.0" }
+ensemble-client = { path = "../ensemble-client", version = "0.1.0" }
