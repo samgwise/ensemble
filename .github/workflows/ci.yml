@@ -17,7 +17,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
@@ -30,7 +30,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - uses: dtolnay/rust-toolchain@stable
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-semver-checks
@@ -59,7 +59,7 @@ jobs:
     name: Publish Dry Run
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - uses: dtolnay/rust-toolchain@stable
