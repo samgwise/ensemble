@@ -5,8 +5,20 @@
 # Display name for this bridge (shown in the hub).
 name = "site-a-bridge"
 
+# Address to bind the QUIC listener to: an IPv4 or IPv6 literal (brackets
+# optional for IPv6) or a resolvable hostname.
+# listen_addr = "0.0.0.0"
+
 # Port to listen on for inbound QUIC connections from remote bridges.
 listen_port = 7400
+
+# Optional shared secret that remote bridges must present in the handshake.
+# Both ends of every peering must use the same token. Leave unset only on
+# trusted networks.
+# auth_token = "change-me"
+
+# Maximum number of simultaneously open inbound connections.
+# max_inbound = 32
 
 [local]
 # Optional: explicit local hub port. If omitted, uses discovery.
