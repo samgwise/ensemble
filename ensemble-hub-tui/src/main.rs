@@ -2,6 +2,7 @@
 //!
 //! Provides a rich terminal interface for monitoring and debugging Ensemble systems.
 
+use std::collections::HashMap;
 use std::io;
 
 use crossterm::{
@@ -20,7 +21,9 @@ use ratatui::{
 
 use ensemble_core::protocol::*;
 use ensemble_discovery::{delete_port_file, is_port_bound, read_port_file, write_port_file};
-use ensemble_hub::{start_server, HubState, ParamInfo, SharedState};
+use ensemble_hub::{
+    start_server, ActionLogEntry, HubState, ParamInfo, ScheduledActionInfo, SharedState, VoiceInfo,
+};
 use ensemble_routing::Pattern;
 
 // ---------------------------------------------------------------------------
@@ -70,11 +73,77 @@ impl App {
 }
 
 // ---------------------------------------------------------------------------
+// State snapshot
+// ---------------------------------------------------------------------------
+
+/// A point-in-time copy of everything the TUI draws.
+///
+/// Captured under the `HubState` lock so the lock is never held across
+/// `terminal.draw()`, which can be slow and would otherwise stall the hub.
+struct StateSnapshot {
+    /// Hub time at capture.
+    now: f64,
+    /// Connected voices, sorted by ID for a stable display order.
+    voices: Vec<VoiceInfo>,
+    /// Manifests by voice ID.
+    manifests: HashMap<VoiceId, VoiceManifest>,
+    /// Current param state.
+    params: Vec<ParamInfo>,
+    /// Scheduled actions.
+    scheduled: Vec<ScheduledActionInfo>,
+    /// Recent routed actions (oldest first).
+    action_log: Vec<ActionLogEntry>,
+    /// Recent hub events (oldest first).
+    event_log: Vec<String>,
+}
+
+impl StateSnapshot {
+    /// Clone everything the TUI needs out of the hub state.
+    fn capture(state: &HubState) -> Self {
+        // HashMap iteration order is arbitrary, so sort voices by ID to keep
+        // the Voice Browser (and the meaning of the selection index) stable.
+        let mut voices = state.voices();
+        voices.sort_by_key(|v| v.id);
+        Self {
+            now: state.now(),
+            voices,
+            manifests: state.manifests().clone(),
+            params: state.param_state(),
+            scheduled: state.scheduled_actions(),
+            action_log: state.action_log().iter().cloned().collect(),
+            event_log: state.event_log().to_vec(),
+        }
+    }
+}
+
+/// Clamp a selection index to a list of `len` items (an empty list clamps
+/// to 0). Guards against voices disconnecting between draws.
+fn clamp_selection(selection: usize, len: usize) -> usize {
+    if len == 0 {
+        0
+    } else {
+        selection.min(len - 1)
+    }
+}
+
+/// Truncate a payload string for display.
+///
+/// Operates on chars rather than bytes so multi-byte UTF-8 content can
+/// never cause a slice panic.
+fn truncate_payload(payload: &str) -> String {
+    if payload.chars().count() > 40 {
+        format!("{}...", payload.chars().take(37).collect::<String>())
+    } else {
+        payload.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TUI rendering
 // ---------------------------------------------------------------------------
 
 /// Draw the entire TUI.
-fn draw(frame: &mut Frame, app: &App, state: &HubState) {
+fn draw(frame: &mut Frame, app: &App, snap: &StateSnapshot) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -86,7 +155,7 @@ fn draw(frame: &mut Frame, app: &App, state: &HubState) {
         ])
         .split(frame.area());
 
-    draw_header(frame, state, chunks[0]);
+    draw_header(frame, snap, chunks[0]);
     draw_tabs(frame, app, chunks[1]);
 
     // Top section: Voices + Manifest side by side.
@@ -95,19 +164,18 @@ fn draw(frame: &mut Frame, app: &App, state: &HubState) {
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(chunks[2]);
 
-    draw_voice_browser(frame, app, state, top_chunks[0]);
-    draw_manifest_browser(frame, app, state, top_chunks[1]);
+    draw_voice_browser(frame, app, snap, top_chunks[0]);
+    draw_manifest_browser(frame, app, snap, top_chunks[1]);
 
-    draw_action_monitor(frame, state, chunks[3]);
-    draw_detail_pane(frame, app, state, chunks[4]);
+    draw_action_monitor(frame, snap, chunks[3]);
+    draw_detail_pane(frame, app, snap, chunks[4]);
 }
 
 /// Draw the header bar.
-fn draw_header(frame: &mut Frame, state: &HubState, area: Rect) {
-    let hub_time = state.now();
-    let voices = state.voices();
-    let voice_count = voices.len();
-    let scheduled = state.scheduled_actions().len();
+fn draw_header(frame: &mut Frame, snap: &StateSnapshot, area: Rect) {
+    let hub_time = snap.now;
+    let voice_count = snap.voices.len();
+    let scheduled = snap.scheduled.len();
 
     let header = Paragraph::new(format!(
         " Ensemble Hub | time: {hub_time:.2}s | voices: {voice_count} | scheduled: {scheduled} | 'q' quit, 'Tab' cycle detail, '1-5' select detail"
@@ -152,8 +220,8 @@ fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Draw the Voice Browser pane.
-fn draw_voice_browser(frame: &mut Frame, app: &App, state: &HubState, area: Rect) {
-    let voices = state.voices();
+fn draw_voice_browser(frame: &mut Frame, app: &App, snap: &StateSnapshot, area: Rect) {
+    let voices = &snap.voices;
     let items: Vec<ListItem> = voices
         .iter()
         .enumerate()
@@ -165,7 +233,7 @@ fn draw_voice_browser(frame: &mut Frame, app: &App, state: &HubState, area: Rect
             } else {
                 Style::default()
             };
-            let connected_secs = state.now() - v.connected_at;
+            let connected_secs = snap.now - v.connected_at;
             ListItem::new(format!(
                 "  #{}: \"{}\"  ({:.0}s ago)",
                 v.id, v.name, connected_secs
@@ -186,10 +254,9 @@ fn draw_voice_browser(frame: &mut Frame, app: &App, state: &HubState, area: Rect
 }
 
 /// Draw the Manifest Browser pane for the selected voice.
-fn draw_manifest_browser(frame: &mut Frame, app: &App, state: &HubState, area: Rect) {
-    let voices = state.voices();
-    let content = if let Some(voice) = voices.get(app.voice_selection) {
-        if let Some(manifest) = state.manifest(voice.id) {
+fn draw_manifest_browser(frame: &mut Frame, app: &App, snap: &StateSnapshot, area: Rect) {
+    let content = if let Some(voice) = snap.voices.get(app.voice_selection) {
+        if let Some(manifest) = snap.manifests.get(&voice.id) {
             let mut lines = vec![
                 Line::from(vec![
                     Span::styled("Name: ", Style::default().fg(Color::Green)),
@@ -269,8 +336,8 @@ fn draw_manifest_browser(frame: &mut Frame, app: &App, state: &HubState, area: R
 }
 
 /// Draw the Action Monitor pane.
-fn draw_action_monitor(frame: &mut Frame, state: &HubState, area: Rect) {
-    let action_log = state.action_log();
+fn draw_action_monitor(frame: &mut Frame, snap: &StateSnapshot, area: Rect) {
+    let action_log = &snap.action_log;
     let items: Vec<ListItem> = action_log
         .iter()
         .rev()
@@ -298,24 +365,23 @@ fn draw_action_monitor(frame: &mut Frame, state: &HubState, area: Rect) {
 }
 
 /// Draw the detail pane based on current selection.
-fn draw_detail_pane(frame: &mut Frame, app: &App, state: &HubState, area: Rect) {
+fn draw_detail_pane(frame: &mut Frame, app: &App, snap: &StateSnapshot, area: Rect) {
     match app.detail_pane {
-        DetailPane::Params => draw_param_inspector(frame, app, state, area),
-        DetailPane::Schedule => draw_schedule_monitor(frame, state, area),
-        DetailPane::Log => draw_log_viewer(frame, state, area),
-        DetailPane::Manifest => draw_manifest_detail(frame, app, state, area),
+        DetailPane::Params => draw_param_inspector(frame, app, snap, area),
+        DetailPane::Schedule => draw_schedule_monitor(frame, snap, area),
+        DetailPane::Log => draw_log_viewer(frame, snap, area),
+        DetailPane::Manifest => draw_manifest_detail(frame, app, snap, area),
         DetailPane::RouteTester => draw_route_tester(frame, app, area),
     }
 }
 
 /// Draw the Param Inspector.
-fn draw_param_inspector(frame: &mut Frame, app: &App, state: &HubState, area: Rect) {
-    let voices = state.voices();
-    let selected_voice_id = voices.get(app.voice_selection).map(|v| v.id);
+fn draw_param_inspector(frame: &mut Frame, app: &App, snap: &StateSnapshot, area: Rect) {
+    let selected_voice_id = snap.voices.get(app.voice_selection).map(|v| v.id);
 
-    let params: Vec<ParamInfo> = state
-        .param_state()
-        .into_iter()
+    let params: Vec<&ParamInfo> = snap
+        .params
+        .iter()
         .filter(|p| selected_voice_id.is_none_or(|vid| p.source == vid))
         .collect();
 
@@ -332,12 +398,8 @@ fn draw_param_inspector(frame: &mut Frame, app: &App, state: &HubState, area: Re
                 }
                 _ => format!("{:?}", p.message.payload),
             };
-            // Truncate long payloads.
-            let payload_display = if payload_str.len() > 40 {
-                format!("{}...", &payload_str[..37])
-            } else {
-                payload_str
-            };
+            // Truncate long payloads (char-safe for multi-byte UTF-8).
+            let payload_display = truncate_payload(&payload_str);
             ListItem::new(format!(
                 "  {} = {}  (from {})",
                 p.address, payload_display, p.source_name
@@ -355,8 +417,8 @@ fn draw_param_inspector(frame: &mut Frame, app: &App, state: &HubState, area: Re
 }
 
 /// Draw the Scheduling Monitor.
-fn draw_schedule_monitor(frame: &mut Frame, state: &HubState, area: Rect) {
-    let scheduled = state.scheduled_actions();
+fn draw_schedule_monitor(frame: &mut Frame, snap: &StateSnapshot, area: Rect) {
+    let scheduled = &snap.scheduled;
     let items: Vec<ListItem> = scheduled
         .iter()
         .map(|sa| {
@@ -365,7 +427,7 @@ fn draw_schedule_monitor(frame: &mut Frame, state: &HubState, area: Rect) {
                 SignalType::Param => "PAR",
                 SignalType::Stream => "STR",
             };
-            let now = state.now();
+            let now = snap.now;
             let remaining = (sa.timestamp - now).max(0.0);
             ListItem::new(format!(
                 "  [{:.3}] {} {} -> {} (in {:.2}s)",
@@ -384,8 +446,8 @@ fn draw_schedule_monitor(frame: &mut Frame, state: &HubState, area: Rect) {
 }
 
 /// Draw the Log Viewer.
-fn draw_log_viewer(frame: &mut Frame, state: &HubState, area: Rect) {
-    let event_log = state.event_log();
+fn draw_log_viewer(frame: &mut Frame, snap: &StateSnapshot, area: Rect) {
+    let event_log = &snap.event_log;
     let items: Vec<ListItem> = event_log
         .iter()
         .rev()
@@ -403,8 +465,8 @@ fn draw_log_viewer(frame: &mut Frame, state: &HubState, area: Rect) {
 }
 
 /// Draw the Manifest detail view (same as manifest browser but in detail pane).
-fn draw_manifest_detail(frame: &mut Frame, app: &App, state: &HubState, area: Rect) {
-    draw_manifest_browser(frame, app, state, area);
+fn draw_manifest_detail(frame: &mut Frame, app: &App, snap: &StateSnapshot, area: Rect) {
+    draw_manifest_browser(frame, app, snap, area);
 }
 
 /// Draw the Route Tester.
@@ -574,23 +636,50 @@ fn handle_input(app: &mut App, key: event::KeyEvent) {
 // Main TUI loop
 // ---------------------------------------------------------------------------
 
+/// RAII guard that restores the terminal on drop.
+///
+/// Ensures raw mode is disabled and the alternate screen is left even when
+/// the TUI exits via an error or a panic, so the user's terminal is never
+/// stranded.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    /// Enter raw mode and switch to the alternate screen.
+    fn new() -> anyhow::Result<Self> {
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
 /// Run the TUI.
 async fn run_tui(state: SharedState) -> anyhow::Result<()> {
-    // Set up terminal.
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
+    // Set up the terminal; the guard restores it on every exit path.
+    let _guard = TerminalGuard::new()?;
+    let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
 
     loop {
-        // Draw.
-        {
+        // Snapshot the hub state under the lock, then drop the guard before
+        // drawing so the lock is never held across terminal I/O.
+        let snap = {
             let st = state.lock().await;
-            terminal.draw(|frame| draw(frame, &app, &st))?;
-        }
+            StateSnapshot::capture(&st)
+        };
+
+        // Keep the selection within the voice list as voices come and go.
+        app.voice_selection = clamp_selection(app.voice_selection, snap.voices.len());
+
+        terminal.draw(|frame| draw(frame, &app, &snap))?;
 
         // Handle input (non-blocking, 50ms timeout for responsive UI).
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -603,10 +692,6 @@ async fn run_tui(state: SharedState) -> anyhow::Result<()> {
             break;
         }
     }
-
-    // Restore terminal.
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
     Ok(())
 }
@@ -670,4 +755,49 @@ async fn main() -> anyhow::Result<()> {
     let result = run_tui(state).await;
     let _ = delete_port_file();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_payload_short() {
+        assert_eq!(truncate_payload("hello"), "hello");
+    }
+
+    #[test]
+    fn test_truncate_payload_long_ascii() {
+        let long = "a".repeat(50);
+        let out = truncate_payload(&long);
+        assert_eq!(out, format!("{}...", "a".repeat(37)));
+    }
+
+    #[test]
+    fn test_truncate_payload_multibyte() {
+        // 50 multi-byte chars: byte slicing at 37 would panic mid-character,
+        // char-based truncation must not.
+        let multi = "é".repeat(50);
+        let out = truncate_payload(&multi);
+        assert_eq!(out, format!("{}...", "é".repeat(37)));
+        assert_eq!(out.chars().count(), 40);
+    }
+
+    #[test]
+    fn test_truncate_payload_boundary() {
+        // Exactly 40 chars is left alone; 41 is truncated.
+        let forty = "x".repeat(40);
+        assert_eq!(truncate_payload(&forty), forty);
+        let forty_one = "x".repeat(41);
+        assert_eq!(truncate_payload(&forty_one).chars().count(), 40);
+    }
+
+    #[test]
+    fn test_clamp_selection() {
+        assert_eq!(clamp_selection(0, 0), 0);
+        assert_eq!(clamp_selection(5, 0), 0);
+        assert_eq!(clamp_selection(2, 5), 2);
+        assert_eq!(clamp_selection(5, 3), 2);
+        assert_eq!(clamp_selection(0, 1), 0);
+    }
 }
