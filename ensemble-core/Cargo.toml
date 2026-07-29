@@ -13,7 +13,6 @@ ensemble-values = { version = "0.1.0", path = "../ensemble-values" }
 ensemble-protocol = { version = "0.1.0", path = "../ensemble-protocol" }
 ensemble-manifest = { version = "0.1.0", path = "../ensemble-manifest" }
 ensemble-clock = { version = "0.1.0", path = "../ensemble-clock" }
-ensemble-discovery = { version = "0.1.0", path = "../ensemble-discovery" }
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
 tokio = { version = "1", features = ["io-util"] }
