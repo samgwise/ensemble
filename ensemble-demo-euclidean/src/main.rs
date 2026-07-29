@@ -43,9 +43,9 @@ pub struct AppState {
     pub hub: Hub,
     /// Scheduler state (params + step counter).
     pub scheduler: SchedulerState,
-    /// Whether the scheduler is running.
-    pub running: bool,
-    /// Whether the TUI should quit.
+    /// Whether the scheduler is paused (task stays alive, no triggers fire).
+    pub paused: bool,
+    /// Whether the app should quit (stops the scheduler task and the TUI).
     pub should_quit: bool,
 }
 
@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(Mutex::new(AppState {
         hub,
         scheduler: SchedulerState::new(),
-        running: true,
+        paused: false,
         should_quit: false,
     }));
 
@@ -166,7 +166,6 @@ async fn main() -> Result<()> {
     // Stop the scheduler.
     {
         let mut s = state.lock().await;
-        s.running = false;
         s.should_quit = true;
     }
 
