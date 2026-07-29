@@ -1,7 +1,7 @@
 //! Ensemble OSC Bridge — translates between Ensemble actions and OSC/UDP.
 //!
 //! Connects to the hub as a bridge voice and:
-//! - Subscribes to an Ensemble address prefix (default: `/osc/out`)
+//! - Subscribes recursively to an Ensemble address prefix (default: `/osc/out/**`)
 //! - Forwards matching actions as OSC messages via UDP
 //! - Listens for inbound OSC messages on a UDP port
 //! - Publishes received OSC as Ensemble actions under `/osc/in`
@@ -165,6 +165,12 @@ async fn run_action_router(
     osc_prefix: String,
 ) {
     while let Some(action_msg) = hub.recv_action().await {
+        // The client also forwards the hub's unset_param broadcasts on this
+        // channel; only translate genuine actions so an unset doesn't emit a
+        // phantom OSC Nil message.
+        if action_msg.msg_type != MSG_ACTION {
+            continue;
+        }
         let map = match &action_msg.payload {
             Value::Map(m) => m.clone(),
             _ => continue,
@@ -215,8 +221,9 @@ async fn main() -> Result<()> {
     };
     eprintln!("Connected to hub as voice #{}", hub.voice_id);
 
-    // Subscribe to the Ensemble prefix for outbound actions.
-    let subscribe_pattern = format!("{}/*", config.ens_prefix.trim_end_matches('/'));
+    // Subscribe to the Ensemble prefix for outbound actions. The recursive
+    // wildcard covers arbitrarily deep addresses below the prefix.
+    let subscribe_pattern = format!("{}/**", config.ens_prefix.trim_end_matches('/'));
     hub.subscribe(&subscribe_pattern).await?;
     eprintln!("Subscribed to: {}", subscribe_pattern);
 

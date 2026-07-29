@@ -31,7 +31,11 @@ pub fn ensemble_to_osc_args(payload: &Value) -> Vec<OscType> {
     match payload {
         Value::Null => vec![OscType::Nil],
         Value::Bool(b) => vec![OscType::Bool(*b)],
-        Value::Integer(i) => vec![OscType::Int(*i as i32)],
+        // Clamp rather than truncate so out-of-range integers stay ordered
+        // instead of wrapping to a nonsense value.
+        Value::Integer(i) => vec![OscType::Int(
+            (*i).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+        )],
         Value::Float(f) => vec![OscType::Float(f.value() as f32)],
         Value::String(s) => vec![OscType::String(s.clone())],
         Value::Binary(b) => vec![OscType::Blob(b.clone())],
@@ -81,9 +85,26 @@ fn osc_type_to_value(osc: &OscType) -> Value {
     }
 }
 
+/// Strip `prefix` from `addr` on a segment boundary.
+///
+/// Returns `Some(rest)` only when `addr` equals the prefix exactly or
+/// continues with a `/`-delimited segment — so a prefix of "/osc/out" does
+/// not match "/osc/output". A trailing '/' on the prefix is ignored, making
+/// "/osc/out/" behave identically to "/osc/out".
+fn strip_prefix_segment<'a>(addr: &'a str, prefix: &str) -> Option<&'a str> {
+    let prefix = prefix.trim_end_matches('/');
+    let rest = addr.strip_prefix(prefix)?;
+    if rest.is_empty() || rest.starts_with('/') {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
 /// Translate an Ensemble address to an OSC address (outbound: Ensemble → OSC).
 ///
-/// Strips the Ensemble prefix and prepends the OSC prefix.
+/// Strips the Ensemble prefix and prepends the OSC prefix. The prefix only
+/// strips on an exact match or a `/`-delimited segment boundary.
 /// Returns `None` if the address doesn't match the Ensemble prefix.
 ///
 /// # Examples
@@ -96,6 +117,10 @@ fn osc_type_to_value(osc: &OscType) -> Value {
 /// // With ens_prefix="/osc/out", osc_prefix="/sc"
 /// translate_address_outbound("/osc/out/synth/freq", "/osc/out", "/sc")
 ///   → Some("/sc/synth/freq")
+///
+/// // "/osc/output" is NOT under "/osc/out" (no segment boundary)
+/// translate_address_outbound("/osc/output/freq", "/osc/out", "")
+///   → None
 /// ```
 pub fn translate_address_outbound(
     ens_addr: &str,
@@ -106,7 +131,7 @@ pub fn translate_address_outbound(
     let stripped = if ens_prefix.is_empty() {
         ens_addr
     } else {
-        ens_addr.strip_prefix(ens_prefix)?
+        strip_prefix_segment(ens_addr, ens_prefix)?
     };
 
     // Build the OSC address.
@@ -131,7 +156,9 @@ pub fn translate_address_outbound(
 
 /// Translate an OSC address to an Ensemble address (inbound: OSC → Ensemble).
 ///
-/// Strips the OSC prefix and prepends the Ensemble inbound prefix.
+/// Strips the OSC prefix and prepends the Ensemble inbound prefix. The prefix
+/// only strips on an exact match or a `/`-delimited segment boundary;
+/// otherwise the address is kept whole.
 ///
 /// # Examples
 ///
@@ -143,13 +170,17 @@ pub fn translate_address_outbound(
 /// // With osc_prefix="/sc", ens_prefix="/osc/in"
 /// translate_address_inbound("/sc/synth/freq", "/sc", "/osc/in")
 ///   → "/osc/in/synth/freq"
+///
+/// // "/scx/y" does not match "/sc" on a segment boundary, so nothing strips
+/// translate_address_inbound("/scx/y", "/sc", "/osc/in")
+///   → "/osc/in/scx/y"
 /// ```
 pub fn translate_address_inbound(osc_addr: &str, osc_prefix: &str, ens_prefix: &str) -> String {
     // Strip the OSC prefix if present.
     let stripped = if osc_prefix.is_empty() {
         osc_addr
     } else {
-        osc_addr.strip_prefix(osc_prefix).unwrap_or(osc_addr)
+        strip_prefix_segment(osc_addr, osc_prefix).unwrap_or(osc_addr)
     };
 
     // Build the Ensemble address.
@@ -219,11 +250,28 @@ mod tests {
     }
 
     #[test]
+    fn test_ensemble_to_osc_integer_clamped() {
+        // Out-of-range i64 values clamp to the i32 extremes rather than truncate.
+        let args = ensemble_to_osc_args(&Value::Integer(i64::MAX));
+        assert!(matches!(args[0], OscType::Int(i32::MAX)));
+
+        let args = ensemble_to_osc_args(&Value::Integer(i64::MIN));
+        assert!(matches!(args[0], OscType::Int(i32::MIN)));
+
+        let args = ensemble_to_osc_args(&Value::Integer(i32::MAX as i64 + 1));
+        assert!(matches!(args[0], OscType::Int(i32::MAX)));
+
+        let args = ensemble_to_osc_args(&Value::Integer(i32::MIN as i64 - 1));
+        assert!(matches!(args[0], OscType::Int(i32::MIN)));
+    }
+
+    #[test]
     fn test_ensemble_to_osc_float() {
-        let args = ensemble_to_osc_args(&Value::Float(FloatValue::new(3.14)));
+        // 2.5 is exactly representable in f32, so compare directly.
+        let args = ensemble_to_osc_args(&Value::Float(FloatValue::new(2.5)));
         assert_eq!(args.len(), 1);
         if let OscType::Float(f) = args[0] {
-            assert!((f - 3.14).abs() < 0.001);
+            assert_eq!(f, 2.5);
         } else {
             panic!("Expected Float");
         }
@@ -316,6 +364,42 @@ mod tests {
     }
 
     #[test]
+    fn test_address_outbound_segment_boundary() {
+        // "/osc/output" merely shares a byte prefix with "/osc/out" — no strip.
+        assert_eq!(
+            translate_address_outbound("/osc/output/freq", "/osc/out", ""),
+            None
+        );
+        assert_eq!(
+            translate_address_outbound("/osc/out2/x", "/osc/out", ""),
+            None
+        );
+        // An exact prefix match maps to the OSC root.
+        assert_eq!(
+            translate_address_outbound("/osc/out", "/osc/out", ""),
+            Some("/".to_string())
+        );
+        // Arbitrarily deep addresses below the prefix strip fine.
+        assert_eq!(
+            translate_address_outbound("/osc/out/a/very/deep/address", "/osc/out", ""),
+            Some("/a/very/deep/address".to_string())
+        );
+    }
+
+    #[test]
+    fn test_address_outbound_trailing_slash_prefix() {
+        // A trailing slash on the prefix behaves like the bare prefix.
+        assert_eq!(
+            translate_address_outbound("/osc/out/synth", "/osc/out/", ""),
+            Some("/synth".to_string())
+        );
+        assert_eq!(
+            translate_address_outbound("/osc/output/synth", "/osc/out/", ""),
+            None
+        );
+    }
+
+    #[test]
     fn test_address_inbound_basic() {
         let result = translate_address_inbound("/slider/1", "", "/osc/in");
         assert_eq!(result, "/osc/in/slider/1");
@@ -325,6 +409,30 @@ mod tests {
     fn test_address_inbound_with_osc_prefix() {
         let result = translate_address_inbound("/sc/synth/freq", "/sc", "/osc/in");
         assert_eq!(result, "/osc/in/synth/freq");
+    }
+
+    #[test]
+    fn test_address_inbound_segment_boundary() {
+        // "/scx/y" does not match "/sc" on a segment boundary — kept whole.
+        assert_eq!(
+            translate_address_inbound("/scx/y", "/sc", "/osc/in"),
+            "/osc/in/scx/y"
+        );
+        // An exact prefix match maps to the Ensemble prefix root.
+        assert_eq!(
+            translate_address_inbound("/sc", "/sc", "/osc/in"),
+            "/osc/in"
+        );
+        // Deep addresses below the prefix strip fine.
+        assert_eq!(
+            translate_address_inbound("/sc/a/very/deep/address", "/sc", "/osc/in"),
+            "/osc/in/a/very/deep/address"
+        );
+        // A trailing slash on the prefix behaves like the bare prefix.
+        assert_eq!(
+            translate_address_inbound("/sc/synth", "/sc/", "/osc/in"),
+            "/osc/in/synth"
+        );
     }
 
     #[test]
@@ -338,5 +446,23 @@ mod tests {
 
         let back = translate_address_inbound(&osc_addr, osc_prefix, "/osc/in");
         assert_eq!(back, "/osc/in/synth/freq");
+    }
+
+    #[test]
+    fn test_to_osc_message_deep_address() {
+        let msg = to_osc_message(
+            "/osc/out/deep/nested/addr",
+            &Value::Integer(1),
+            "/osc/out",
+            "",
+        )
+        .unwrap();
+        assert_eq!(msg.addr, "/deep/nested/addr");
+        assert_eq!(msg.args.len(), 1);
+    }
+
+    #[test]
+    fn test_to_osc_message_rejects_off_prefix_address() {
+        assert!(to_osc_message("/osc/output/x", &Value::Integer(1), "/osc/out", "").is_none());
     }
 }
