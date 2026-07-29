@@ -40,10 +40,10 @@ Ensemble makes it easy to build bespoke music tools without each tool needing to
 ### 1. Start the hub
 
 ```sh
-cargo run --bin ensemble-hub
+cargo run --bin ensemble-hub-tui
 ```
 
-The hub launches with a TUI showing connected voices and an event log. Press `q` to quit. Use `--headless` for no UI.
+The TUI shows connected voices and an event log. Press `q` to quit. For a headless hub (no UI), use `cargo run --bin ensemble-hub`.
 
 ### 2. Start the MIDI bridge
 
@@ -143,6 +143,8 @@ Payload: `(channel: Integer, note: Integer, velocity: Integer, duration_secs: Fl
 
 The bridge sends note-on immediately (or at the action's timestamp if scheduled) and note-off after `duration_secs`. Uses a mutex counter so retriggering the same note cleanly cancels the previous note-off.
 
+All MIDI payloads are range-validated (channel 0–15, note/velocity/cc 0–127, duration finite and non-negative); invalid payloads are logged and ignored.
+
 **`/midi/cancel`** — Cancel a pending note-off.
 
 Payload: `(channel: Integer, note: Integer)`
@@ -211,7 +213,7 @@ The hub includes a comprehensive TUI for monitoring and debugging:
 - **Log Viewer**: Hub event log
 - **Route Tester**: Test pattern matching interactively
 
-Navigate with number keys (1-7) or Tab. Press `q` to quit.
+Navigate with number keys (1-5) or Tab. Press `q` to quit.
 
 ## Conformance Testing
 
@@ -391,8 +393,14 @@ sudo apt-get install libasound2-dev
 Each crate is versioned independently. To release a specific crate:
 
 1. Ensure all CI checks pass locally
-2. Run `cargo release <version> -p <crate-name>` (e.g., `cargo release 0.2.0 -p ensemble-hub`)
-3. This updates the crate's version, creates a git tag (e.g., `ensemble-hub-v0.2.0`), and publishes to crates.io
+2. Run the Linux verification suite (requires [Podman](https://podman.io/)) — this builds and tests the workspace on Linux and must pass before releasing:
+
+   ```powershell
+   ./scripts/linux-test.ps1
+   ```
+
+3. Run `cargo release <version> -p <crate-name>` (e.g., `cargo release 0.2.0 -p ensemble-hub`)
+4. This updates the crate's version and creates and pushes a git tag (e.g., `ensemble-hub-v0.2.0`); the release workflow then publishes the crate to crates.io
 
 The release workflow is triggered by pushing a tag matching `*-v*` (e.g., `ensemble-core-v0.1.0`). It runs the full test suite, publishes the specific crate to crates.io, and creates a GitHub release.
 
