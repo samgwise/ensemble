@@ -341,11 +341,14 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
     // Register voice (no initial subscriptions — they subscribe after welcome).
     let (tx, mut rx) = mpsc::channel::<WireMessage>(256);
     let voice_id;
+    // Copy of the clock origin for lock-free hub time reads (Instant is Copy).
+    let clock_origin;
     {
         let mut st = state.lock().await;
         voice_id = st.next_voice_id;
         st.next_voice_id += 1;
         let connected_at = st.now();
+        clock_origin = st.clock_origin;
 
         st.voices.insert(
             voice_id,
@@ -362,40 +365,25 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
         st.log(format!(
             "Voice {voice_id} connected: \"{voice_name}\" from {peer}"
         ));
-
-        // Send Welcome.
-        let welcome_msg = welcome(voice_id);
-        if let Err(e) = codec::write_message(&mut writer, &welcome_msg).await {
-            st.log(format!("Voice {voice_id}: failed to send welcome: {e}"));
-            st.voices.remove(&voice_id);
-            return;
-        }
-
-        // Emit hub event: voice joined.
-        let joined_payload = Value::Map({
-            let mut m = BTreeMap::new();
-            m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-            m.insert("name".into(), Value::String(voice_name.clone()));
-            m
-        });
-        emit_hub_event(&st, "/hub/voice/joined", joined_payload).await;
-
-        // Replay current param state to the new voice (no subscriptions yet,
-        // so this will be empty until the voice subscribes — but we keep the
-        // logic for when subscriptions are added post-welcome).
-        let patterns: Vec<Pattern> = st
-            .voices
-            .get(&voice_id)
-            .map(|v| v.subscription_patterns.clone())
-            .unwrap_or_default();
-        for (_source, action_msg) in st.param_state.values() {
-            let action_map = payload_map(action_msg);
-            let address = get_string(&action_map, "address").unwrap_or_default();
-            if matches_any(&patterns, &address) {
-                let _ = tx.send(action_msg.clone()).await;
-            }
-        }
     }
+
+    // Send Welcome (outside the state lock — writes can block).
+    let welcome_msg = welcome(voice_id);
+    if let Err(e) = codec::write_message(&mut writer, &welcome_msg).await {
+        let mut st = state.lock().await;
+        st.log(format!("Voice {voice_id}: failed to send welcome: {e}"));
+        st.voices.remove(&voice_id);
+        return;
+    }
+
+    // Emit hub event: voice joined.
+    let joined_payload = Value::Map({
+        let mut m = BTreeMap::new();
+        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+        m.insert("name".into(), Value::String(voice_name.clone()));
+        m
+    });
+    emit_hub_event(&state, "/hub/voice/joined", joined_payload).await;
 
     // Spawn a writer task that forwards messages from the channel to the TCP stream.
     let writer_handle = tokio::spawn(async move {
@@ -414,8 +402,9 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                     MSG_CLOCK_PING => {
                         let map = payload_map(&msg);
                         let sequence = get_integer(&map, "sequence").unwrap_or(0) as u64;
-                        let st = state.lock().await;
-                        let hub_time = st.now();
+                        // Lock-free hub time read — keeps pong latency (and
+                        // hence clock-sync accuracy) independent of hub load.
+                        let hub_time = clock_origin.elapsed().as_secs_f64();
                         let pong = clock_pong(sequence, hub_time);
                         let _ = tx.send(pong).await;
                     }
@@ -482,8 +471,11 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                                 address: address.clone(),
                                 signal_type,
                             });
-                            // Route immediately.
-                            route_action(&st, voice_id, &address, &routed_msg).await;
+                            // Collect recipients, then release the lock before
+                            // sending — a slow subscriber must never stall the hub.
+                            let recipients = collect_recipients(&st, voice_id, &address);
+                            drop(st);
+                            send_to_recipients(recipients, routed_msg, signal_type).await;
                         }
                     }
 
@@ -492,23 +484,29 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                         let address = get_string(&map, "address").unwrap_or_default();
                         let mut st = state.lock().await;
                         st.param_state.remove(&address);
-                        // Broadcast unset to all subscribers of this address.
-                        for voice in st.voices.values() {
-                            if voice.id == voice_id {
-                                continue;
-                            }
-                            if matches_any(&voice.subscription_patterns, &address) {
-                                let _ = voice.tx.send(msg.clone()).await;
-                            }
-                        }
+                        // Broadcast unset to all subscribers of this address,
+                        // sending after the lock is released.
+                        let recipients = collect_recipients(&st, voice_id, &address);
+                        drop(st);
+                        send_to_recipients(recipients, msg, SignalType::Event).await;
                     }
 
                     MSG_SUBSCRIBE => {
                         let map = payload_map(&msg);
                         let pat_str = get_string(&map, "pattern").unwrap_or_default();
-                        let mut st = state.lock().await;
                         match Pattern::parse(&pat_str) {
                             Ok(p) => {
+                                let mut st = state.lock().await;
+                                // Dedupe: an identical pattern is already registered,
+                                // so subscribing again would cause duplicate delivery.
+                                let already_registered = st
+                                    .voices
+                                    .get(&voice_id)
+                                    .map(|v| v.subscription_strings.iter().any(|s| s == &pat_str))
+                                    .unwrap_or(false);
+                                if already_registered {
+                                    continue;
+                                }
                                 // Collect matching param replays before mutating voice.
                                 let mut replays = Vec::new();
                                 if let Some(voice) = st.voices.get(&voice_id) {
@@ -523,12 +521,19 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                                         }
                                     }
                                 }
-                                // Now mutate voice and send replays.
-                                if let Some(voice) = st.voices.get_mut(&voice_id) {
+                                // Mutate the voice and grab its sender for the replays.
+                                let tx_opt = if let Some(voice) = st.voices.get_mut(&voice_id) {
                                     voice.subscription_patterns.push(p);
                                     voice.subscription_strings.push(pat_str.clone());
+                                    Some(voice.tx.clone())
+                                } else {
+                                    None
+                                };
+                                drop(st);
+                                // Send replays without holding the state lock.
+                                if let Some(voice_tx) = tx_opt {
                                     for action_msg in replays {
-                                        let _ = voice.tx.send(action_msg).await;
+                                        let _ = voice_tx.send(action_msg).await;
                                     }
                                 }
                             }
@@ -537,12 +542,15 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                                     ERR_INVALID_PATTERN,
                                     format!("Invalid subscribe pattern '{pat_str}': {e}"),
                                 );
-                                if let Some(voice) = st.voices.get(&voice_id) {
-                                    let _ = voice.tx.send(err_msg).await;
-                                }
+                                let mut st = state.lock().await;
+                                let tx_opt = st.voices.get(&voice_id).map(|v| v.tx.clone());
                                 st.log(format!(
                                     "Voice {voice_id}: invalid subscribe pattern '{pat_str}': {e}"
                                 ));
+                                drop(st);
+                                if let Some(voice_tx) = tx_opt {
+                                    let _ = voice_tx.send(err_msg).await;
+                                }
                             }
                         }
                     }
@@ -552,8 +560,10 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                         let pat_str = get_string(&map, "pattern").unwrap_or_default();
                         let mut st = state.lock().await;
                         if let Some(voice) = st.voices.get_mut(&voice_id) {
-                            // Remove from string list and parsed patterns in tandem.
-                            if let Some(pos) = voice
+                            // Remove ALL occurrences from string list and parsed
+                            // patterns in tandem (duplicate subscriptions cause
+                            // duplicate delivery, so none may remain).
+                            while let Some(pos) = voice
                                 .subscription_strings
                                 .iter()
                                 .position(|s| s == &pat_str)
@@ -565,16 +575,21 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                     }
 
                     MSG_DISCONNECT => {
-                        let mut st = state.lock().await;
-                        if let Some(name) = st.remove_voice(voice_id, "disconnect") {
+                        let left_payload = {
+                            let mut st = state.lock().await;
+                            st.remove_voice(voice_id, "disconnect")
+                                .map(|name| {
+                                    Value::Map({
+                                        let mut m = BTreeMap::new();
+                                        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                        m.insert("name".into(), Value::String(name));
+                                        m
+                                    })
+                                })
+                        };
+                        if let Some(payload) = left_payload {
                             // Emit hub event: voice left.
-                            let left_payload = Value::Map({
-                                let mut m = BTreeMap::new();
-                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-                                m.insert("name".into(), Value::String(name));
-                                m
-                            });
-                            emit_hub_event(&st, "/hub/voice/left", left_payload).await;
+                            emit_hub_event(&state, "/hub/voice/left", payload).await;
                         }
                         break;
                     }
@@ -582,95 +597,121 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                     MSG_UPDATE_NAME => {
                         let map = payload_map(&msg);
                         let new_name = get_string(&map, "name").unwrap_or_default();
-                        let mut st = state.lock().await;
-                        let old_name = if let Some(voice) = st.voices.get_mut(&voice_id) {
-                            let old = voice.name.clone();
-                            voice.name = new_name.clone();
-                            Some(old)
-                        } else {
-                            None
+                        let renamed_payload = {
+                            let mut st = state.lock().await;
+                            let old_name = if let Some(voice) = st.voices.get_mut(&voice_id) {
+                                let old = voice.name.clone();
+                                voice.name = new_name.clone();
+                                Some(old)
+                            } else {
+                                None
+                            };
+                            old_name.map(|old| {
+                                st.log(format!(
+                                    "Voice {voice_id} renamed: \"{old}\" -> \"{new_name}\""
+                                ));
+                                Value::Map({
+                                    let mut m = BTreeMap::new();
+                                    m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                    m.insert("old_name".into(), Value::String(old));
+                                    m.insert("new_name".into(), Value::String(new_name));
+                                    m
+                                })
+                            })
                         };
-                        if let Some(old) = old_name {
-                            st.log(format!(
-                                "Voice {voice_id} renamed: \"{old}\" -> \"{new_name}\""
-                            ));
+                        if let Some(payload) = renamed_payload {
                             // Emit hub event: voice renamed.
-                            let renamed_payload = Value::Map({
-                                let mut m = BTreeMap::new();
-                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-                                m.insert("old_name".into(), Value::String(old));
-                                m.insert("new_name".into(), Value::String(new_name));
-                                m
-                            });
-                            emit_hub_event(&st, "/hub/voice/renamed", renamed_payload).await;
+                            emit_hub_event(&state, "/hub/voice/renamed", payload).await;
                         }
                     }
 
                     MSG_SET_MANIFEST => {
                         let map = payload_map(&msg);
                         let manifest_value = get_value(&map, "manifest").unwrap_or(Value::Null);
-                        let mut st = state.lock().await;
-                        match VoiceManifest::from_value(&manifest_value) {
-                            Some(manifest) => {
-                                st.log(format!(
-                                    "Voice {voice_id}: manifest set (\"{}\")",
-                                    manifest.name
-                                ));
-                                st.manifests.insert(voice_id, manifest);
+                        enum SetOutcome {
+                            Set(Value),
+                            Rejected(mpsc::Sender<WireMessage>),
+                        }
+                        let outcome = {
+                            let mut st = state.lock().await;
+                            match VoiceManifest::from_value(&manifest_value) {
+                                Some(manifest) => {
+                                    st.log(format!(
+                                        "Voice {voice_id}: manifest set (\"{}\")",
+                                        manifest.name
+                                    ));
+                                    st.manifests.insert(voice_id, manifest);
+                                    Some(SetOutcome::Set(manifest_value.clone()))
+                                }
+                                None => {
+                                    st.log(format!(
+                                        "Voice {voice_id}: malformed set_manifest rejected"
+                                    ));
+                                    st.voices
+                                        .get(&voice_id)
+                                        .map(|v| SetOutcome::Rejected(v.tx.clone()))
+                                }
+                            }
+                        };
+                        match outcome {
+                            Some(SetOutcome::Set(manifest_value)) => {
                                 // Emit hub event: manifest set.
                                 let set_payload = Value::Map({
                                     let mut m = BTreeMap::new();
                                     m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-                                    m.insert("manifest".into(), manifest_value.clone());
+                                    m.insert("manifest".into(), manifest_value);
                                     m
                                 });
-                                emit_hub_event(&st, "/hub/manifest/set", set_payload).await;
+                                emit_hub_event(&state, "/hub/manifest/set", set_payload).await;
                             }
-                            None => {
+                            Some(SetOutcome::Rejected(voice_tx)) => {
                                 let err_msg = error(
                                     ERR_MALFORMED_MANIFEST,
                                     "set_manifest: manifest is not a valid manifest map",
                                 );
-                                if let Some(voice) = st.voices.get(&voice_id) {
-                                    let _ = voice.tx.send(err_msg).await;
-                                }
-                                st.log(format!(
-                                    "Voice {voice_id}: malformed set_manifest rejected"
-                                ));
+                                let _ = voice_tx.send(err_msg).await;
                             }
+                            None => {}
                         }
                     }
 
                     MSG_PATCH_MANIFEST => {
                         let map = payload_map(&msg);
                         let patch_value = get_value(&map, "patch").unwrap_or(Value::Null);
-                        let mut st = state.lock().await;
                         let patch_map = match &patch_value {
                             Value::Map(m) => m.clone(),
                             _ => {
+                                // Reject and keep the connection alive — the voice
+                                // must not be dropped or leaked over a bad patch.
                                 let err_msg = error(
                                     ERR_MALFORMED_MANIFEST,
                                     "patch_manifest: patch must be a map",
                                 );
-                                if let Some(voice) = st.voices.get(&voice_id) {
-                                    let _ = voice.tx.send(err_msg).await;
-                                }
+                                let mut st = state.lock().await;
+                                let tx_opt = st.voices.get(&voice_id).map(|v| v.tx.clone());
                                 st.log(format!(
                                     "Voice {voice_id}: malformed patch_manifest rejected (not a map)"
                                 ));
-                                return;
+                                drop(st);
+                                if let Some(voice_tx) = tx_opt {
+                                    let _ = voice_tx.send(err_msg).await;
+                                }
+                                continue;
                             }
                         };
-                        // Get or create the manifest, apply the patch, and capture the name.
-                        let name = {
-                            let manifest = st
-                                .manifests
-                                .entry(voice_id)
-                                .or_insert_with(VoiceManifest::default);
-                            manifest.apply_patch(&patch_map);
-                            manifest.name.clone()
-                        };
-                        st.log(format!("Voice {voice_id}: manifest patched (\"{name}\")"));
+                        // Get or create the manifest, apply the patch, and log it.
+                        {
+                            let mut st = state.lock().await;
+                            let name = {
+                                let manifest = st
+                                    .manifests
+                                    .entry(voice_id)
+                                    .or_insert_with(VoiceManifest::default);
+                                manifest.apply_patch(&patch_map);
+                                manifest.name.clone()
+                            };
+                            st.log(format!("Voice {voice_id}: manifest patched (\"{name}\")"));
+                        }
                         // Emit hub event: manifest updated.
                         let updated_payload = Value::Map({
                             let mut m = BTreeMap::new();
@@ -678,7 +719,7 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                             m.insert("patch".into(), patch_value);
                             m
                         });
-                        emit_hub_event(&st, "/hub/manifest/updated", updated_payload).await;
+                        emit_hub_event(&state, "/hub/manifest/updated", updated_payload).await;
                     }
 
                     other => {
@@ -691,31 +732,41 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
             }
 
             Err(CodecError::ConnectionClosed) => {
-                let mut st = state.lock().await;
-                if let Some(name) = st.remove_voice(voice_id, "connection closed") {
+                let left_payload = {
+                    let mut st = state.lock().await;
+                    st.remove_voice(voice_id, "connection closed")
+                        .map(|name| {
+                            Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("name".into(), Value::String(name));
+                                m
+                            })
+                        })
+                };
+                if let Some(payload) = left_payload {
                     // Emit hub event: voice left.
-                    let left_payload = Value::Map({
-                        let mut m = BTreeMap::new();
-                        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-                        m.insert("name".into(), Value::String(name));
-                        m
-                    });
-                    emit_hub_event(&st, "/hub/voice/left", left_payload).await;
+                    emit_hub_event(&state, "/hub/voice/left", payload).await;
                 }
                 break;
             }
 
             Err(e) => {
-                let mut st = state.lock().await;
-                if let Some(name) = st.remove_voice(voice_id, &format!("read error: {e}")) {
+                let left_payload = {
+                    let mut st = state.lock().await;
+                    st.remove_voice(voice_id, &format!("read error: {e}"))
+                        .map(|name| {
+                            Value::Map({
+                                let mut m = BTreeMap::new();
+                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                m.insert("name".into(), Value::String(name));
+                                m
+                            })
+                        })
+                };
+                if let Some(payload) = left_payload {
                     // Emit hub event: voice left.
-                    let left_payload = Value::Map({
-                        let mut m = BTreeMap::new();
-                        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-                        m.insert("name".into(), Value::String(name));
-                        m
-                    });
-                    emit_hub_event(&st, "/hub/voice/left", left_payload).await;
+                    emit_hub_event(&state, "/hub/voice/left", payload).await;
                 }
                 break;
             }
@@ -725,53 +776,66 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
     writer_handle.abort();
 }
 
-/// Emit a hub event as an ordinary action with source=0 (hub).
-/// Hub events are routed to all subscribers of /hub/** addresses.
-/// They do not alter protocol state.
-async fn emit_hub_event(st: &HubState, address: &str, payload: Value) {
-    let now = st.now();
-    let msg = action_with_source(0, address, SignalType::Event, now, payload);
-    // Route to all subscribers of /hub/** (source=0 means no exclusion).
-    for voice in st.voices.values() {
-        if matches_any(&voice.subscription_patterns, address) {
-            // Hub events are guaranteed delivery (not streams).
-            let _ = voice.tx.send(msg.clone()).await;
+/// Collect the sender channels of all voices subscribed to `address`
+/// (excluding `source`). The senders are cloned so the state lock can be
+/// released before any messages are sent.
+fn collect_recipients(st: &HubState, source: VoiceId, address: &str) -> Vec<mpsc::Sender<WireMessage>> {
+    st.voices
+        .values()
+        .filter(|v| v.id != source)
+        .filter(|v| matches_any(&v.subscription_patterns, address))
+        .map(|v| v.tx.clone())
+        .collect()
+}
+
+/// Send a message to previously collected recipients.
+///
+/// Streams are best-effort (dropped if the channel is full); events and
+/// params wait for channel capacity (guaranteed delivery).
+///
+/// Callers must NOT hold the state lock while sending: a slow subscriber can
+/// block a guaranteed send, and holding the lock across it would stall all
+/// routing, clock pongs, and the scheduler hub-wide.
+async fn send_to_recipients(
+    recipients: Vec<mpsc::Sender<WireMessage>>,
+    msg: WireMessage,
+    signal_type: SignalType,
+) {
+    for tx in recipients {
+        if signal_type == SignalType::Stream {
+            // Streams are best-effort: drop if the channel is full.
+            let _ = tx.try_send(msg.clone());
+        } else {
+            // Events and params are guaranteed: wait for capacity.
+            let _ = tx.send(msg.clone()).await;
         }
     }
 }
 
-/// Route an action to all subscribed voices (except the sender).
-/// Streams are dropped if the channel is full (best-effort delivery).
-/// Events and params wait for channel capacity (guaranteed delivery).
-async fn route_action(st: &HubState, source: VoiceId, address: &str, msg: &WireMessage) {
-    // Extract signal type from the message for congestion handling.
-    let signal_type = match &msg.payload {
-        Value::Map(m) => get_string(m, "signal_type")
-            .and_then(|s| parse_signal_type(&s))
-            .unwrap_or(SignalType::Event),
-        _ => SignalType::Event,
+/// Emit a hub event as an ordinary action with source=0 (hub).
+/// Hub events are routed to all subscribers of /hub/** addresses.
+/// They do not alter protocol state. The state lock is held only long enough
+/// to build the message and collect recipients.
+async fn emit_hub_event(state: &SharedState, address: &str, payload: Value) {
+    let (msg, recipients) = {
+        let st = state.lock().await;
+        let now = st.now();
+        let msg = action_with_source(0, address, SignalType::Event, now, payload);
+        // Source=0 means no exclusion.
+        let recipients = collect_recipients(&st, 0, address);
+        (msg, recipients)
     };
-
-    for voice in st.voices.values() {
-        if voice.id == source {
-            continue;
-        }
-        if matches_any(&voice.subscription_patterns, address) {
-            if signal_type == SignalType::Stream {
-                // Streams are best-effort: drop if channel is full.
-                let _ = voice.tx.try_send(msg.clone());
-            } else {
-                // Events and params are guaranteed: wait for capacity.
-                let _ = voice.tx.send(msg.clone()).await;
-            }
-        }
-    }
+    // Hub events are guaranteed delivery (not streams).
+    send_to_recipients(recipients, msg, SignalType::Event).await;
 }
 
 /// Background task that polls the schedule queue and dispatches due actions.
 async fn run_scheduler(state: SharedState) {
     loop {
-        {
+        // Collect due actions and their recipients under the lock, then
+        // release it before dispatching — a slow subscriber must not stall
+        // the scheduler or the rest of the hub.
+        let due: Vec<(ScheduledAction, Vec<mpsc::Sender<WireMessage>>)> = {
             let mut st = state.lock().await;
             let now = st.now();
             let now_key = timestamp_key(now);
@@ -779,7 +843,7 @@ async fn run_scheduler(state: SharedState) {
             // Collect all keys that are due (timestamp <= now).
             let due_keys: Vec<u64> = st.schedule.range(..=now_key).map(|(k, _)| *k).collect();
 
-            // Dispatch them.
+            let mut due = Vec::new();
             for key in due_keys {
                 if let Some(actions) = st.schedule.remove(&key) {
                     for scheduled in actions {
@@ -803,17 +867,20 @@ async fn run_scheduler(state: SharedState) {
                             address: scheduled.address.clone(),
                             signal_type: scheduled.signal_type,
                         });
-                        route_action(
-                            &st,
-                            scheduled.source,
-                            &scheduled.address,
-                            &scheduled.message,
-                        )
-                        .await;
+                        let recipients =
+                            collect_recipients(&st, scheduled.source, &scheduled.address);
+                        due.push((scheduled, recipients));
                     }
                 }
             }
+            due
+        };
+
+        // Dispatch due actions (lock released).
+        for (scheduled, recipients) in due {
+            send_to_recipients(recipients, scheduled.message, scheduled.signal_type).await;
         }
+
         // Poll every 1ms for tight scheduling.
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }

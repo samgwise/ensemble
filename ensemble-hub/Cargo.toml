@@ -14,3 +14,6 @@ ensemble-discovery = { version = "0.1.0", path = "../ensemble-discovery" }
 ensemble-routing = { version = "0.1.0", path = "../ensemble-routing" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
+
+[dev-dependencies]
+ensemble-client = { version = "0.1.0", path = "../ensemble-client" }
