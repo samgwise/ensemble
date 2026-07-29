@@ -282,6 +282,23 @@ impl Pattern {
     /// empty if the pattern has no `{name}` segments), or `None` if it does
     /// not match.
     pub fn matches(&self, address: &str) -> Option<CaptureSet> {
+        self.match_with_suffix(address)
+            .map(|(captures, _suffix)| captures)
+    }
+
+    /// Match this pattern against an address string, also returning the
+    /// trailing segments consumed by a final `**`.
+    ///
+    /// Returns `Some((captures, suffix))` if the address matches, where
+    /// `suffix` holds the address segments matched by a trailing recursive
+    /// wildcard (empty when the pattern has no `**`, or when the `**` matched
+    /// zero segments). The suffix borrows from `address`. Returns `None` if
+    /// the address does not match.
+    ///
+    /// This is intended for template expansion (`**` passthrough), where the
+    /// caller needs the unmatched remainder of the address without doing
+    /// string-offset arithmetic on the pattern source.
+    pub fn match_with_suffix<'a>(&self, address: &'a str) -> Option<(CaptureSet, Vec<&'a str>)> {
         // Address must start with '/'.
         if !address.starts_with('/') {
             return None;
@@ -290,62 +307,56 @@ impl Pattern {
         let addr_segments: Vec<&str> = address[1..].split('/').collect();
         let mut captures = HashMap::new();
 
-        if Self::match_segments(&self.segments, &addr_segments, &mut captures) {
-            Some(CaptureSet { inner: captures })
-        } else {
-            None
-        }
-    }
-
-    /// Recursive segment matching.
-    fn match_segments(
-        pattern: &[Segment],
-        address: &[&str],
-        captures: &mut HashMap<String, String>,
-    ) -> bool {
         let mut pi = 0;
         let mut ai = 0;
+        let mut suffix: Vec<&str> = Vec::new();
 
-        while pi < pattern.len() {
-            match &pattern[pi] {
+        while pi < self.segments.len() {
+            match &self.segments[pi] {
                 Segment::Exact(expected) => {
-                    if ai >= address.len() {
-                        return false;
+                    if ai >= addr_segments.len() {
+                        return None;
                     }
-                    if address[ai] != expected.as_str() {
-                        return false;
+                    if addr_segments[ai] != expected.as_str() {
+                        return None;
                     }
                     pi += 1;
                     ai += 1;
                 }
                 Segment::Wildcard => {
                     // Must match exactly one segment.
-                    if ai >= address.len() {
-                        return false;
+                    if ai >= addr_segments.len() {
+                        return None;
                     }
                     pi += 1;
                     ai += 1;
                 }
                 Segment::Capture(name) => {
                     // Captures exactly one segment.
-                    if ai >= address.len() {
-                        return false;
+                    if ai >= addr_segments.len() {
+                        return None;
                     }
-                    captures.insert(name.clone(), address[ai].to_string());
+                    captures.insert(name.clone(), addr_segments[ai].to_string());
                     pi += 1;
                     ai += 1;
                 }
                 Segment::RecursiveWildcard => {
-                    // Matches zero or more remaining segments.
-                    // Since ** must be the final segment, we can just accept
-                    // everything remaining.
-                    return true;
+                    // `**` is only valid as the final segment, so everything
+                    // remaining (possibly zero segments) is the suffix.
+                    suffix = addr_segments[ai..].to_vec();
+                    ai = addr_segments.len();
+                    pi += 1;
                 }
             }
         }
 
-        // All pattern segments consumed; address must also be fully consumed.
-        ai == address.len()
+        // All pattern segments consumed; the address must also be fully
+        // consumed (guaranteed when a `**` was hit, since it eats the rest).
+        if ai == addr_segments.len() {
+            Some((CaptureSet { inner: captures }, suffix))
+        } else {
+            None
+        }
     }
 
     /// The original pattern string.
@@ -693,5 +704,113 @@ mod tests {
         assert!(p1.matches(addr).is_some());
         assert!(p2.matches(addr).is_some());
         assert!(p3.matches(addr).is_some());
+    }
+
+    // -- match_with_suffix --
+
+    #[test]
+    fn suffix_after_exact_prefix() {
+        let pat = Pattern::parse("/transport/**").unwrap();
+        let (caps, suffix) = pat.match_with_suffix("/transport/bpm/now").unwrap();
+        assert!(caps.is_empty());
+        assert_eq!(suffix, vec!["bpm", "now"]);
+    }
+
+    #[test]
+    fn suffix_zero_segments() {
+        // `**` matching zero segments yields an empty suffix.
+        let pat = Pattern::parse("/track/**").unwrap();
+        let (caps, suffix) = pat.match_with_suffix("/track").unwrap();
+        assert!(caps.is_empty());
+        assert!(suffix.is_empty());
+    }
+
+    #[test]
+    fn suffix_with_wildcard_before_recursive() {
+        let pat = Pattern::parse("/track/*/**").unwrap();
+        let (caps, suffix) = pat.match_with_suffix("/track/7/sends/reverb").unwrap();
+        assert!(caps.is_empty());
+        assert_eq!(suffix, vec!["sends", "reverb"]);
+    }
+
+    #[test]
+    fn suffix_with_capture_before_recursive() {
+        let pat = Pattern::parse("/track/{id}/**").unwrap();
+        let (caps, suffix) = pat.match_with_suffix("/track/7/volume/trim").unwrap();
+        assert_eq!(caps.get("id"), Some("7"));
+        assert_eq!(suffix, vec!["volume", "trim"]);
+    }
+
+    #[test]
+    fn suffix_with_capture_and_zero_segments() {
+        let pat = Pattern::parse("/track/{id}/**").unwrap();
+        let (caps, suffix) = pat.match_with_suffix("/track/7").unwrap();
+        assert_eq!(caps.get("id"), Some("7"));
+        assert!(suffix.is_empty());
+    }
+
+    #[test]
+    fn suffix_multibyte_content() {
+        // Multibyte segments must be returned intact, never sliced mid-char.
+        let pat = Pattern::parse("/track/{番号}/**").unwrap();
+        let (caps, suffix) = pat.match_with_suffix("/track/⑦/音量/パン").unwrap();
+        assert_eq!(caps.get("番号"), Some("⑦"));
+        assert_eq!(suffix, vec!["音量", "パン"]);
+    }
+
+    #[test]
+    fn suffix_multibyte_wildcard_before_recursive() {
+        let pat = Pattern::parse("/*/**").unwrap();
+        let (_caps, suffix) = pat.match_with_suffix("/é/x").unwrap();
+        assert_eq!(suffix, vec!["x"]);
+    }
+
+    #[test]
+    fn suffix_empty_for_pattern_without_recursive_wildcard() {
+        let pat = Pattern::parse("/foo/bar").unwrap();
+        let (caps, suffix) = pat.match_with_suffix("/foo/bar").unwrap();
+        assert!(caps.is_empty());
+        assert!(suffix.is_empty());
+    }
+
+    #[test]
+    fn suffix_none_when_address_does_not_match() {
+        let pat = Pattern::parse("/foo/**").unwrap();
+        assert!(pat.match_with_suffix("/bar/x").is_none());
+        // Address without a leading slash is not a valid address.
+        assert!(pat.match_with_suffix("foo/x").is_none());
+        // Pattern segments beyond the address length fail.
+        let pat2 = Pattern::parse("/track/*/volume").unwrap();
+        assert!(pat2.match_with_suffix("/track").is_none());
+    }
+
+    #[test]
+    fn suffix_segments_borrow_from_address() {
+        // The suffix borrows from the input, so it must reflect the original
+        // address bytes exactly (no re-encoding).
+        let address = "/a/b/c d/é";
+        let pat = Pattern::parse("/a/**").unwrap();
+        let (_caps, suffix) = pat.match_with_suffix(address).unwrap();
+        assert_eq!(suffix.join("/"), "b/c d/é");
+    }
+
+    #[test]
+    fn matches_agrees_with_match_with_suffix() {
+        // The two matchers must agree on whether an address matches.
+        let cases = [
+            ("/foo/**", "/foo/a/b"),
+            ("/foo/**", "/foo"),
+            ("/foo/{id}/bar", "/foo/7/bar"),
+            ("/foo/{id}/bar", "/foo/7/baz"),
+            ("/track/*/volume", "/track/1/volume"),
+        ];
+        for (pattern, address) in cases {
+            let pat = Pattern::parse(pattern).unwrap();
+            assert_eq!(
+                pat.matches(address).is_some(),
+                pat.match_with_suffix(address).is_some(),
+                "matchers disagree on {pattern} vs {address}"
+            );
+        }
     }
 }
