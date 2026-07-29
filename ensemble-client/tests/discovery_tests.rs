@@ -30,7 +30,6 @@ use ensemble_client::Hub;
 
 struct TestVoice {
     id: VoiceId,
-    name: String,
     subscription_patterns: Vec<Pattern>,
     tx: mpsc::Sender<WireMessage>,
 }
@@ -77,13 +76,10 @@ async fn handle_test_voice(stream: TcpStream, hub: Arc<Mutex<TestHub>>) {
     let mut writer = BufWriter::new(writer);
 
     // Wait for Hello.
-    let hello_msg = match codec::read_message(&mut reader).await {
-        Ok(msg) if msg.msg_type == MSG_HELLO => msg,
+    match codec::read_message(&mut reader).await {
+        Ok(msg) if msg.msg_type == MSG_HELLO => {}
         _ => return,
-    };
-
-    let hello_map = payload_map(&hello_msg);
-    let voice_name = get_string(&hello_map, "name").unwrap_or_else(|| "unknown".into());
+    }
 
     let (tx, mut rx) = mpsc::channel::<WireMessage>(256);
     let voice_id;
@@ -96,7 +92,6 @@ async fn handle_test_voice(stream: TcpStream, hub: Arc<Mutex<TestHub>>) {
             voice_id,
             TestVoice {
                 id: voice_id,
-                name: voice_name.clone(),
                 subscription_patterns: Vec::new(),
                 tx: tx.clone(),
             },
@@ -116,57 +111,47 @@ async fn handle_test_voice(stream: TcpStream, hub: Arc<Mutex<TestHub>>) {
     });
 
     // Read loop.
-    loop {
-        match codec::read_message(&mut reader).await {
-            Ok(msg) => match msg.msg_type.as_str() {
-                MSG_CLOCK_PING => {
-                    let map = payload_map(&msg);
-                    let sequence = get_integer(&map, "sequence").unwrap_or(0) as u64;
-                    let h = hub.lock().await;
-                    let hub_time = h.now();
-                    let pong = clock_pong(sequence, hub_time);
-                    let _ = tx.send(pong).await;
-                }
-                MSG_ACTION => {
-                    let map = payload_map(&msg);
-                    let address = get_string(&map, "address").unwrap_or_default();
-                    let signal_type = get_string(&map, "signal_type")
-                        .and_then(|s| parse_signal_type(&s))
-                        .unwrap_or(SignalType::Event);
-                    let timestamp = get_float(&map, "timestamp").unwrap_or(0.0);
-                    let payload = get_value(&map, "payload").unwrap_or(Value::Null);
+    while let Ok(msg) = codec::read_message(&mut reader).await {
+        match msg.msg_type.as_str() {
+            MSG_CLOCK_PING => {
+                let map = payload_map(&msg);
+                let sequence = get_integer(&map, "sequence").unwrap_or(0) as u64;
+                let h = hub.lock().await;
+                let hub_time = h.now();
+                let pong = clock_pong(sequence, hub_time);
+                let _ = tx.send(pong).await;
+            }
+            MSG_ACTION => {
+                let map = payload_map(&msg);
+                let address = get_string(&map, "address").unwrap_or_default();
+                let signal_type = get_string(&map, "signal_type")
+                    .and_then(|s| parse_signal_type(&s))
+                    .unwrap_or(SignalType::Event);
+                let timestamp = get_float(&map, "timestamp").unwrap_or(0.0);
+                let payload = get_value(&map, "payload").unwrap_or(Value::Null);
 
-                    let routed_msg = action_with_source(
-                        voice_id,
-                        address.clone(),
-                        signal_type,
-                        timestamp,
-                        payload,
-                    );
+                let routed_msg =
+                    action_with_source(voice_id, address.clone(), signal_type, timestamp, payload);
 
-                    let h = hub.lock().await;
-                    for voice in h.voices.values() {
-                        if voice.id != voice_id
-                            && matches_any(&voice.subscription_patterns, &address)
-                        {
-                            let _ = voice.tx.send(routed_msg.clone()).await;
-                        }
+                let h = hub.lock().await;
+                for voice in h.voices.values() {
+                    if voice.id != voice_id && matches_any(&voice.subscription_patterns, &address) {
+                        let _ = voice.tx.send(routed_msg.clone()).await;
                     }
                 }
-                MSG_SUBSCRIBE => {
-                    let map = payload_map(&msg);
-                    let pat_str = get_string(&map, "pattern").unwrap_or_default();
-                    let mut h = hub.lock().await;
-                    if let Some(voice) = h.voices.get_mut(&voice_id) {
-                        if let Ok(p) = Pattern::parse(&pat_str) {
-                            voice.subscription_patterns.push(p);
-                        }
+            }
+            MSG_SUBSCRIBE => {
+                let map = payload_map(&msg);
+                let pat_str = get_string(&map, "pattern").unwrap_or_default();
+                let mut h = hub.lock().await;
+                if let Some(voice) = h.voices.get_mut(&voice_id) {
+                    if let Ok(p) = Pattern::parse(&pat_str) {
+                        voice.subscription_patterns.push(p);
                     }
                 }
-                MSG_DISCONNECT => break,
-                _ => {}
-            },
-            Err(_) => break,
+            }
+            MSG_DISCONNECT => break,
+            _ => {}
         }
     }
 }
