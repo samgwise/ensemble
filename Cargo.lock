@@ -440,7 +440,6 @@ name = "ensemble-core"
 version = "0.1.0"
 dependencies = [
  "ensemble-clock",
- "ensemble-discovery",
  "ensemble-manifest",
  "ensemble-protocol",
  "ensemble-values",

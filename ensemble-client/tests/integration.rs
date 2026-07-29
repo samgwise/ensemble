@@ -1381,7 +1381,7 @@ async fn per_sender_fifo_ordering() {
     for expected in 0..3 {
         let msg = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv_action())
             .await
-            .expect(&format!("Timed out waiting for action {}", expected))
+            .unwrap_or_else(|_| panic!("Timed out waiting for action {}", expected))
             .expect("Channel closed");
 
         let map = payload_map(&msg);
@@ -1792,6 +1792,84 @@ async fn hub_event_manifest_updated() {
 
     observer.disconnect().await;
     voice.disconnect().await;
+}
+
+#[tokio::test]
+async fn hub_errors_are_surfaced_to_the_application() {
+    let port = start_test_hub().await;
+
+    let mut hub = Hub::connect(port, "error-prone").await.unwrap();
+
+    // Publishing to the reserved /hub/ namespace is rejected with an error.
+    hub.send_action(action("/hub/illegal", SignalType::Event, 0.0, Value::Null))
+        .await
+        .unwrap();
+
+    let err = tokio::time::timeout(std::time::Duration::from_secs(2), hub.recv_error())
+        .await
+        .expect("Timed out waiting for hub error")
+        .expect("Error channel closed");
+
+    assert_eq!(err.code, ERR_RESERVED_NAMESPACE);
+    assert!(err.message.contains("/hub/illegal"));
+
+    hub.disconnect().await;
+}
+
+#[tokio::test]
+async fn try_recv_error_returns_none_when_no_errors() {
+    let port = start_test_hub().await;
+    let mut hub = Hub::connect(port, "well-behaved").await.unwrap();
+
+    // No errors expected for a well-behaved voice.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(hub.try_recv_error().is_none());
+
+    hub.disconnect().await;
+}
+
+#[tokio::test]
+async fn disconnect_is_flushed_before_closing() {
+    let port = start_test_hub().await;
+
+    // Observer watches hub lifecycle events.
+    let mut observer = Hub::connect(port, "observer").await.unwrap();
+    observer.subscribe("/hub/**").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let leaver = Hub::connect(port, "leaver").await.unwrap();
+    let leaver_id = leaver.voice_id;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    leaver.disconnect().await;
+
+    // The hub must observe the disconnect (voice removed → /hub/voice/left),
+    // which proves the message was flushed before the socket closed rather
+    // than dropped with the aborted writer task.
+    let deadline = Instant::now() + std::time::Duration::from_secs(3);
+    let mut saw_left = false;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(remaining, observer.recv_action()).await {
+            Ok(Some(msg)) => {
+                let map = payload_map(&msg);
+                let address = get_string(&map, "address").unwrap_or_default();
+                if address != "/hub/voice/left" {
+                    continue;
+                }
+                if let Value::Map(p) = get_value(&map, "payload").unwrap_or(Value::Null) {
+                    if get_integer(&p, "voice_id") == Some(leaver_id as i64) {
+                        saw_left = true;
+                        break;
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+
+    assert!(saw_left, "hub never observed the leaver's disconnect");
+    observer.disconnect().await;
 }
 
 #[tokio::test]

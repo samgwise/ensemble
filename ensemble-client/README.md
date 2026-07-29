@@ -97,8 +97,24 @@ if let Some(action_msg) = hub.recv_action().await {
 }
 ```
 
+## Error Handling
+
+Errors reported by the hub (e.g. a rejected subscription or a reserved-namespace violation) are queued on a bounded error channel rather than printed. Drain them with `recv_error()` (async) or `try_recv_error()` (non-blocking):
+
+```rust
+while let Some(err) = hub.try_recv_error() {
+    eprintln!("Hub error {}: {}", err.code, err.message);
+}
+```
+
+If the channel fills because the application never drains it, subsequent errors are dropped so action delivery is never stalled.
+
+## Disconnecting
+
+`hub.disconnect().await` sends a graceful `disconnect` message and waits (with a bounded timeout) for the writer queue to flush it to the socket before closing, so the hub reliably observes the departure.
+
 ## Clock Synchronisation
 
-Clock sync happens automatically in the background. Call `hub.now().await` to get the estimated hub time. Use `hub.is_synced().await` to check whether synchronisation has been established.
+Clock sync happens automatically in the background. Call `hub.now().await` to get the estimated hub time. Use `hub.is_synced().await` to check whether synchronisation has been established. The estimate re-converges automatically if network conditions change (see `ensemble-clock`).
 
 See [`design/local-discovery.md`](../design/local-discovery.md) for the full discovery specification.

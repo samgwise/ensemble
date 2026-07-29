@@ -30,22 +30,9 @@ pub use ensemble_protocol::{
     unsubscribe,
     update_name,
     welcome,
-    ActionPayload,
-    ClockPingPayload,
-    ClockPongPayload,
-    ErrorPayload,
-    HelloPayload,
-    PatchManifestPayload,
-    SetManifestPayload,
-    // Payload structures
-    SignalType,
-    SubscribePayload,
-    UnsetParamPayload,
-    UnsubscribePayload,
-    UpdateNamePayload,
     // Types
+    SignalType,
     VoiceId,
-    WelcomePayload,
     // WireMessage envelope
     WireMessage,
     ERR_INTERNAL_ERROR,

@@ -1,7 +1,9 @@
 //! Ensemble wire protocol — message envelope and types.
 //!
 //! This crate implements the Ensemble Wire Protocol Specification (Draft v0.1).
-//! It defines the WireMessage envelope, message type constants, and payload structures.
+//! It defines the WireMessage envelope, message type constants, and the
+//! hand-rolled message builder functions that are the single source of wire
+//! truth for payload layout.
 
 use ensemble_values::Value;
 use serde::{Deserialize, Serialize};
@@ -73,92 +75,6 @@ pub enum SignalType {
     Param,
     /// High-rate best-effort data. Dropped under congestion rather than queued.
     Stream,
-}
-
-// ---------------------------------------------------------------------------
-// Payload structures
-// ---------------------------------------------------------------------------
-
-/// Hello message payload — establishes protocol session.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HelloPayload {
-    pub protocol_version: u32,
-    pub name: String,
-}
-
-/// Welcome message payload — assigns voice ID.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WelcomePayload {
-    pub voice_id: VoiceId,
-}
-
-/// Subscribe message payload — register a subscription pattern.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SubscribePayload {
-    pub pattern: String,
-}
-
-/// Unsubscribe message payload — remove a subscription pattern.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UnsubscribePayload {
-    pub pattern: String,
-}
-
-/// Action message payload — application traffic.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ActionPayload {
-    /// VoiceId of the originating voice. Set by the hub when routing.
-    /// Clients may omit when sending (hub assigns based on connection).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<VoiceId>,
-    pub address: String,
-    pub signal_type: SignalType,
-    pub timestamp: f64,
-    pub payload: Value,
-}
-
-/// Unset param message payload — remove retained param state.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UnsetParamPayload {
-    pub address: String,
-}
-
-/// Clock ping message payload — client → hub timing request.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ClockPingPayload {
-    pub sequence: u64,
-}
-
-/// Clock pong message payload — hub → client timing response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ClockPongPayload {
-    pub sequence: u64,
-    pub hub_time: f64,
-}
-
-/// Error message payload — hub → client error notification.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ErrorPayload {
-    pub code: String,
-    pub message: String,
-}
-
-/// Update name message payload — runtime renaming.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UpdateNamePayload {
-    pub name: String,
-}
-
-/// Set manifest message payload — replace current manifest.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SetManifestPayload {
-    pub manifest: Value,
-}
-
-/// Patch manifest message payload — partial manifest update.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PatchManifestPayload {
-    pub patch: Value,
 }
 
 // ---------------------------------------------------------------------------

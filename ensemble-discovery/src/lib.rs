@@ -148,6 +148,11 @@ fn get_unix_uid() -> u32 {
 
 /// Writes the hub port to the platform-specific port file.
 ///
+/// The write is atomic: the content is first staged in a temporary file in
+/// the same directory, then renamed over the port file, so readers never
+/// observe a partially written file. The temporary file is removed again if
+/// the write fails part-way through.
+///
 /// The parent directory is created if it does not exist. On Unix, the file is
 /// created with mode `0600` so it is readable only by the owning user.
 ///
@@ -173,19 +178,38 @@ pub fn write_port_file(port: u16) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    let mut file = fs::File::create(&path)?;
-    file.write_all(port.to_string().as_bytes())?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
+    // Stage the content in a sibling temporary file, then rename it over the
+    // port file. The rename is atomic on all supported platforms (including
+    // replacing an existing destination), so concurrent readers see either
+    // the old or the new file, never a half-written one.
+    let temp_path = path.with_extension("tmp");
 
-    #[cfg(unix)]
-    {
-        let mut permissions = file.metadata()?.permissions();
-        permissions.set_mode(0o600);
-        fs::set_permissions(&path, permissions)?;
+    let result = (|| -> io::Result<()> {
+        let mut file = fs::File::create(&temp_path)?;
+        file.write_all(port.to_string().as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+
+        #[cfg(unix)]
+        {
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_mode(0o600);
+            fs::set_permissions(&temp_path, permissions)?;
+        }
+
+        // Ensure the data hits disk before the rename publishes it.
+        drop(file);
+        fs::rename(&temp_path, &path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        // Best-effort cleanup so a failed write doesn't leave the staging
+        // file behind.
+        let _ = fs::remove_file(&temp_path);
     }
 
-    Ok(())
+    result
 }
 
 /// Reads the hub port from the platform-specific port file.
@@ -337,6 +361,26 @@ mod tests {
         // Read port
         let port = read_port_file();
         assert_eq!(port, Some(7331));
+
+        // Clean up
+        delete_port_file().ok();
+        set_port_file_path(None);
+        fs::remove_file(&temp_path).ok();
+    }
+
+    #[test]
+    fn test_write_port_file_leaves_no_temp_file() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let temp_path = env::temp_dir().join("test-atomic-write.port");
+        set_port_file_path(Some(temp_path.clone()));
+
+        // Write twice: the second write must cleanly replace the first.
+        write_port_file(7331).expect("Failed to write port file");
+        write_port_file(8442).expect("Failed to rewrite port file");
+        assert_eq!(read_port_file(), Some(8442));
+
+        // The staging file must not be left behind.
+        assert!(!temp_path.with_extension("tmp").exists());
 
         // Clean up
         delete_port_file().ok();

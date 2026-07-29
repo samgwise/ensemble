@@ -48,12 +48,26 @@
 //!         println!("Received {} from voice {}", address, source);
 //!     }
 //!
+//!     // Surface any errors the hub reported (e.g. rejected subscriptions).
+//!     while let Some(err) = hub.try_recv_error() {
+//!         eprintln!("Hub error: {err}");
+//!     }
+//!
 //!     hub.disconnect().await;
 //! }
 //! ```
+//!
+//! # Error surfacing
+//!
+//! Errors reported by the hub (`error` control messages, e.g. a rejected
+//! subscription or a reserved-namespace violation) are queued on a bounded
+//! channel rather than printed. Drain them with [`Hub::recv_error`] or
+//! [`Hub::try_recv_error`]. If the application never drains the channel and
+//! it fills, subsequent errors are dropped so action delivery is never
+//! stalled by unconsumed errors.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ensemble_clock::ClockSync;
 use ensemble_core::protocol::*;
@@ -61,10 +75,43 @@ use ensemble_core::{codec, CodecError};
 use ensemble_discovery as discovery;
 use tokio::io::{BufReader, BufWriter};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 
 /// Default hub port used when discovery cannot locate a running hub.
 const DEFAULT_HUB_PORT: u16 = 7331;
+
+/// Maximum number of clock pings awaiting a pong before the oldest is
+/// evicted. Keeps memory bounded if the hub stops replying.
+const MAX_PENDING_PINGS: usize = 64;
+
+/// Capacity of the hub-error channel. Errors beyond this are dropped rather
+/// than allowed to stall the reader task (and with it, action delivery).
+const MAX_PENDING_ERRORS: usize = 64;
+
+/// How long [`Hub::disconnect`] waits for the writer queue to drain before
+/// closing the connection anyway.
+const DISCONNECT_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// An error reported by the hub via an `error` control message.
+///
+/// Errors are non-fatal unless the hub closes the connection afterwards
+/// (as it does for `unsupported_protocol_version`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HubError {
+    /// Machine-readable error code (see the `ERR_*` constants in
+    /// `ensemble_core::protocol`).
+    pub code: String,
+    /// Human-readable description of what went wrong.
+    pub message: String,
+}
+
+impl std::fmt::Display for HubError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for HubError {}
 
 /// Local clock wrapper that pairs a monotonic origin with a ClockSync tracker.
 struct LocalClock {
@@ -100,6 +147,14 @@ impl LocalClock {
 
     /// Record when a ping was sent.
     fn record_ping(&mut self, sequence: u64) {
+        if self.pending_pings.len() >= MAX_PENDING_PINGS {
+            // Evict the oldest outstanding ping (sequence numbers increase
+            // monotonically, so the smallest key is the oldest) to keep the
+            // map bounded if pongs stop arriving.
+            if let Some(&oldest) = self.pending_pings.keys().min() {
+                self.pending_pings.remove(&oldest);
+            }
+        }
         self.pending_pings.insert(sequence, self.local_now());
     }
 
@@ -143,6 +198,11 @@ pub struct Hub {
     tx: mpsc::Sender<WireMessage>,
     /// Channel to receive routed actions from the hub.
     action_rx: mpsc::Receiver<WireMessage>,
+    /// Channel to receive errors reported by the hub.
+    error_rx: mpsc::Receiver<HubError>,
+    /// Flush-request channel to the writer task, used by [`Hub::disconnect`]
+    /// to wait for the write queue to drain before closing.
+    flush_tx: mpsc::Sender<oneshot::Sender<()>>,
     /// Shared clock state.
     clock: Arc<Mutex<LocalClock>>,
     /// Handle to the reader task (aborted on drop to close connection).
@@ -195,12 +255,38 @@ impl Hub {
         let clock = Arc::new(Mutex::new(LocalClock::new()));
         let (write_tx, mut write_rx) = mpsc::channel::<WireMessage>(256);
         let (action_tx, action_rx) = mpsc::channel::<WireMessage>(256);
+        let (error_tx, error_rx) = mpsc::channel::<HubError>(MAX_PENDING_ERRORS);
+        let (flush_tx, flush_rx) = mpsc::channel::<oneshot::Sender<()>>(1);
 
-        // Writer task — sends queued messages to the hub.
+        // Writer task — sends queued messages to the hub. Flush requests are
+        // only serviced once the message queue is empty (biased select polls
+        // the queue first), so an acknowledged flush guarantees everything
+        // queued beforehand has been written to the socket.
         let writer_handle = tokio::spawn(async move {
-            while let Some(msg) = write_rx.recv().await {
-                if codec::write_message(&mut writer, &msg).await.is_err() {
-                    break;
+            let mut flush_rx = Some(flush_rx);
+            loop {
+                tokio::select! {
+                    biased;
+                    msg = write_rx.recv() => {
+                        match msg {
+                            Some(msg) => {
+                                if codec::write_message(&mut writer, &msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    req = async { flush_rx.as_mut().unwrap().recv().await }, if flush_rx.is_some() => {
+                        match req {
+                            Some(ack) => {
+                                let _ = ack.send(());
+                            }
+                            // Flush requester gone — stop polling a closed
+                            // channel (it would otherwise spin ready).
+                            None => flush_rx = None,
+                        }
+                    }
                 }
             }
         });
@@ -232,8 +318,17 @@ impl Hub {
                                 let _ = action_tx.send(msg).await;
                             }
                             MSG_ERROR => {
-                                // Log errors but continue (could be non-fatal)
-                                eprintln!("Hub error: {:?}", msg.payload);
+                                // Route errors to the error channel so
+                                // applications can observe rejections.
+                                // Best-effort: if the channel is full (the
+                                // app isn't draining it), drop rather than
+                                // stall the reader task.
+                                if let Value::Map(map) = &msg.payload {
+                                    let _ = error_tx.try_send(HubError {
+                                        code: get_string(map, "code").unwrap_or_default(),
+                                        message: get_string(map, "message").unwrap_or_default(),
+                                    });
+                                }
                             }
                             _ => {} // Ignore other messages
                         }
@@ -249,19 +344,23 @@ impl Hub {
         let sync_clock = clock.clone();
         let clock_handle = tokio::spawn(async move {
             loop {
-                {
+                // Take the sequence under the lock, then release it before
+                // sending so a congested writer channel can't hold up pong
+                // processing (or anyone else needing the clock).
+                let sequence = {
                     let mut clk = sync_clock.lock().await;
-                    let sequence = clk.next_sequence();
-                    let _ = sync_tx.send(clock_ping(sequence)).await;
-                }
-                // Sync frequently at first, then slow down.
-                let clk = sync_clock.lock().await;
-                let interval = if clk.is_synced() {
-                    std::time::Duration::from_secs(5)
-                } else {
-                    std::time::Duration::from_millis(200)
+                    clk.next_sequence()
                 };
-                drop(clk);
+                let _ = sync_tx.send(clock_ping(sequence)).await;
+                // Sync frequently at first, then slow down.
+                let interval = {
+                    let clk = sync_clock.lock().await;
+                    if clk.is_synced() {
+                        Duration::from_secs(5)
+                    } else {
+                        Duration::from_millis(200)
+                    }
+                };
                 tokio::time::sleep(interval).await;
             }
         });
@@ -270,6 +369,8 @@ impl Hub {
             voice_id,
             tx: write_tx,
             action_rx,
+            error_rx,
+            flush_tx,
             clock,
             reader_handle: Some(reader_handle),
             writer_handle: Some(writer_handle),
@@ -348,6 +449,25 @@ impl Hub {
         self.action_rx.recv().await
     }
 
+    /// Receive the next error reported by the hub.
+    ///
+    /// Returns `None` once the connection has closed and all queued errors
+    /// have been drained.
+    ///
+    /// Delivery is best-effort: if the application does not drain the error
+    /// channel and it fills (currently 64 entries), further errors are
+    /// dropped rather than allowed to stall action delivery.
+    pub async fn recv_error(&mut self) -> Option<HubError> {
+        self.error_rx.recv().await
+    }
+
+    /// Non-blocking variant of [`Hub::recv_error`].
+    ///
+    /// Returns `None` if no error is currently queued.
+    pub fn try_recv_error(&mut self) -> Option<HubError> {
+        self.error_rx.try_recv().ok()
+    }
+
     /// Subscribe to actions matching the given pattern.
     pub async fn subscribe(&self, pattern: &str) -> Result<(), CodecError> {
         let msg = subscribe(pattern);
@@ -405,8 +525,22 @@ impl Hub {
     }
 
     /// Send a disconnect message and close the connection.
+    ///
+    /// The disconnect is flushed before the connection is torn down: after
+    /// queueing the message this waits (with a bounded timeout) for the
+    /// writer task to confirm everything queued ahead of it has been
+    /// written to the socket, so the hub reliably observes the graceful
+    /// disconnect. Dropping the `Hub` then aborts the background tasks and
+    /// closes the socket.
     pub async fn disconnect(self) {
-        let _ = self.tx.send(disconnect()).await;
+        if self.tx.send(disconnect()).await.is_ok() {
+            let (ack_tx, ack_rx) = oneshot::channel();
+            if self.flush_tx.send(ack_tx).await.is_ok() {
+                // Bounded wait — if the writer is wedged (e.g. a dead
+                // socket), close anyway rather than hang the caller.
+                let _ = tokio::time::timeout(DISCONNECT_FLUSH_TIMEOUT, ack_rx).await;
+            }
+        }
     }
 }
 
@@ -422,5 +556,29 @@ impl Drop for Hub {
         if let Some(handle) = self.clock_handle.take() {
             handle.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_pings_are_bounded_with_oldest_evict() {
+        let mut clock = LocalClock::new();
+
+        // Record more pings than the cap allows.
+        let total = MAX_PENDING_PINGS as u64 + 10;
+        for seq in 0..total {
+            clock.record_ping(seq);
+        }
+
+        // The map stays at the cap, with the oldest sequences evicted and
+        // the newest all retained.
+        assert_eq!(clock.pending_pings.len(), MAX_PENDING_PINGS);
+        assert!(!clock.pending_pings.contains_key(&0));
+        assert!(!clock.pending_pings.contains_key(&9));
+        assert!(clock.pending_pings.contains_key(&10));
+        assert!(clock.pending_pings.contains_key(&(total - 1)));
     }
 }
