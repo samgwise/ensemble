@@ -485,6 +485,7 @@ name = "ensemble-hub"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ensemble-client",
  "ensemble-core",
  "ensemble-discovery",
  "ensemble-routing",
