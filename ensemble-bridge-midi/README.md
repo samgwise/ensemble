@@ -48,7 +48,9 @@ cargo run --bin ensemble-bridge-midi -- --hub 8000 --output 2
 
 ## Ensemble action protocol
 
-The bridge subscribes to `/midi/*` and handles three action addresses:
+The bridge subscribes to `/midi/*` and handles three action addresses.
+
+All payloads are range-validated at parse time: `channel` must be 0-15, `note`, `velocity`, `cc_number` and `value` must be 0-127, and `duration_secs` must be finite and non-negative. Malformed or out-of-range payloads are logged and dropped before any MIDI bytes are produced, so a bad action can never panic the bridge or corrupt the MIDI stream.
 
 ### `/midi/play` — schedule a note
 
@@ -95,7 +97,7 @@ When `--input` is specified, the bridge listens on the given MIDI input port and
 
 All input actions are published with `SignalType::Event` and timestamp `0.0`.
 
-> **Note:** MIDI input forwarding to the hub is currently limited — incoming messages are logged but not yet forwarded as hub actions. Full bidirectional support requires the client library to expose a send-only handle.
+> **Note:** MIDI input forwarding is **best-effort**. The MIDI driver callback runs on a real-time thread that must never block, so incoming events are queued with `try_send` into a bounded buffer (256 messages) and silently dropped if that buffer is full. Sustained input bursts can therefore lose events rather than slow down the driver.
 
 ## Key state and cancel safety
 
@@ -103,6 +105,6 @@ The bridge tracks per-key state using a mutex counter pattern. Each `(channel, n
 
 1. The counter is bumped, producing a new event ID.
 2. The Note-On is sent immediately if the event ID matches.
-3. A tokio task sleeps for the duration, then attempts Note-Off — but only if the event ID still matches.
+3. Only if the Note-On actually fired, a tokio task sleeps for the duration, then attempts Note-Off — but only if the event ID still matches.
 
 This means retriggering a note (sending a new `/midi/play` for the same key before the previous Note-Off fires) silently drops the old Note-Off, avoiding stuck notes without requiring explicit cancellation.

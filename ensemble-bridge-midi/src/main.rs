@@ -6,6 +6,14 @@
 //! - `/midi/cc` → sends a MIDI CC message
 //! - MIDI input → publishes as Ensemble actions through the hub
 //!
+//! All action payloads are range-validated at parse time (channel 0-15;
+//! note/cc/value 0-127; finite, non-negative durations), so malformed actions
+//! can never panic the bridge or corrupt the MIDI stream.
+//!
+//! MIDI input forwarding is best-effort: the driver callback must never block,
+//! so inbound events are queued with `try_send` and dropped when the buffer is
+//! full rather than back-pressuring the MIDI driver.
+//!
 //! Usage:
 //!   cargo run --bin ensemble-bridge-midi
 //!   cargo run --bin ensemble-bridge-midi -- --output 1 --input 0
@@ -61,26 +69,51 @@ fn spawn_midi_output(conn: midir::MidiOutputConnection) -> mpsc::Sender<MidiOutC
 // Action routing
 // ---------------------------------------------------------------------------
 
+/// Extract a MIDI channel (0-15) from a value.
+///
+/// Anything wider would turn the status byte into a non-channel message
+/// (e.g. `0x90 | 200`), corrupting the MIDI stream, so out-of-range values
+/// are rejected rather than truncated.
+fn parse_channel(value: &Value) -> Option<u8> {
+    match value {
+        Value::Integer(v) if (0..=15).contains(v) => Some(*v as u8),
+        _ => None,
+    }
+}
+
+/// Extract a 7-bit MIDI data byte (0-127) from a value.
+fn parse_data_byte(value: &Value) -> Option<u8> {
+    match value {
+        Value::Integer(v) if (0..=127).contains(v) => Some(*v as u8),
+        _ => None,
+    }
+}
+
+/// Extract a note duration in seconds from a value.
+///
+/// `Duration::from_secs_f64` panics on negative or non-finite input, so both
+/// are rejected here at parse time.
+fn parse_duration(value: &Value) -> Option<f64> {
+    match value {
+        Value::Float(v) => {
+            let secs = v.value();
+            (secs.is_finite() && secs >= 0.0).then_some(secs)
+        }
+        _ => None,
+    }
+}
+
 /// Extract (channel, note, velocity, duration_secs) from a /midi/play payload.
+///
+/// All fields are range-validated (see the helpers above); `None` is returned
+/// for any out-of-range field.
 fn parse_play_payload(payload: &Value) -> Option<(u8, u8, u8, f64)> {
     match payload {
         Value::Tuple(values) if values.len() >= 4 => {
-            let channel = match &values[0] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
-            let note = match &values[1] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
-            let velocity = match &values[2] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
-            let duration = match &values[3] {
-                Value::Float(v) => v.value(),
-                _ => return None,
-            };
+            let channel = parse_channel(&values[0])?;
+            let note = parse_data_byte(&values[1])?;
+            let velocity = parse_data_byte(&values[2])?;
+            let duration = parse_duration(&values[3])?;
             Some((channel, note, velocity, duration))
         }
         _ => None,
@@ -88,17 +121,13 @@ fn parse_play_payload(payload: &Value) -> Option<(u8, u8, u8, f64)> {
 }
 
 /// Extract (channel, note) from a /midi/cancel payload.
+///
+/// Fields are range-validated identically to /midi/play.
 fn parse_cancel_payload(payload: &Value) -> Option<(u8, u8)> {
     match payload {
         Value::Tuple(values) if values.len() >= 2 => {
-            let channel = match &values[0] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
-            let note = match &values[1] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
+            let channel = parse_channel(&values[0])?;
+            let note = parse_data_byte(&values[1])?;
             Some((channel, note))
         }
         _ => None,
@@ -106,21 +135,14 @@ fn parse_cancel_payload(payload: &Value) -> Option<(u8, u8)> {
 }
 
 /// Extract (channel, cc_number, value) from a /midi/cc payload.
+///
+/// Fields are range-validated identically to /midi/play.
 fn parse_cc_payload(payload: &Value) -> Option<(u8, u8, u8)> {
     match payload {
         Value::Tuple(values) if values.len() >= 3 => {
-            let channel = match &values[0] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
-            let cc = match &values[1] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
-            let val = match &values[2] {
-                Value::Integer(v) => *v as u8,
-                _ => return None,
-            };
+            let channel = parse_channel(&values[0])?;
+            let cc = parse_data_byte(&values[1])?;
+            let val = parse_data_byte(&values[2])?;
             Some((channel, cc, val))
         }
         _ => None,
@@ -149,32 +171,36 @@ async fn run_action_router(
                     ks.bump(channel, note)
                 };
 
-                // Schedule note-on (immediately or use action timestamp via hub scheduler).
-                let ks = key_store.clone();
-                let tx = midi_tx.clone();
-                let tx2 = midi_tx.clone();
-                let ks2 = key_store.clone();
-
-                // Note-on.
-                {
-                    let mut store = ks.lock().await;
+                // Note-on (immediately; the hub scheduler handles the timing of
+                // timestamped actions before they reach us).
+                let note_on_fired = {
+                    let mut store = key_store.lock().await;
                     if let Some(bytes) = store.play(event_id, channel, note, velocity) {
-                        let _ = tx.send(MidiOutCmd::Send(bytes)).await;
+                        let _ = midi_tx.send(MidiOutCmd::Send(bytes)).await;
                         eprintln!("  note-on: ch={channel} note={note} vel={velocity}");
+                        true
+                    } else {
+                        false
                     }
-                }
+                };
 
-                // Schedule note-off after duration.
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs_f64(duration_secs)).await;
-                    let mut store = ks2.lock().await;
-                    if let Some(bytes) = store.stop(event_id, channel, note) {
-                        let _ = tx2.send(MidiOutCmd::Send(bytes)).await;
-                        eprintln!("  note-off: ch={channel} note={note}");
-                    }
-                });
+                // Schedule note-off after the duration — only when the note-on
+                // actually fired, so a superseded play can never cut short a
+                // note it did not start.
+                if note_on_fired {
+                    let ks2 = key_store.clone();
+                    let tx2 = midi_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs_f64(duration_secs)).await;
+                        let mut store = ks2.lock().await;
+                        if let Some(bytes) = store.stop(event_id, channel, note) {
+                            let _ = tx2.send(MidiOutCmd::Send(bytes)).await;
+                            eprintln!("  note-off: ch={channel} note={note}");
+                        }
+                    });
+                }
             } else {
-                eprintln!("  /midi/play: invalid payload {:?}", payload);
+                eprintln!("  /midi/play: invalid payload {payload:?}");
             }
         } else if address == "/midi/cancel" {
             if let Some((channel, note)) = parse_cancel_payload(&payload) {
@@ -182,12 +208,16 @@ async fn run_action_router(
                 let mut ks = key_store.lock().await;
                 ks.bump(channel, note);
                 eprintln!("  cancel: ch={channel} note={note}");
+            } else {
+                eprintln!("  /midi/cancel: invalid payload {payload:?}");
             }
         } else if address == "/midi/cc" {
             if let Some((channel, cc, val)) = parse_cc_payload(&payload) {
                 let bytes = MidiBytes([0xB0 | channel, cc, val]);
                 let _ = midi_tx.send(MidiOutCmd::Send(bytes)).await;
                 eprintln!("  cc: ch={channel} cc={cc} val={val}");
+            } else {
+                eprintln!("  /midi/cc: invalid payload {payload:?}");
             }
         } else {
             eprintln!("  unhandled MIDI action: {}", address);
@@ -200,6 +230,11 @@ async fn run_action_router(
 // ---------------------------------------------------------------------------
 
 /// Spawn a MIDI input listener that publishes incoming MIDI as Ensemble actions.
+///
+/// Forwarding is best-effort: the midir callback runs on a real-time driver
+/// thread that must never block, so messages are queued with `try_send` and
+/// silently dropped when the channel is full. Sustained input bursts can
+/// therefore lose events rather than back-pressuring the driver.
 fn spawn_midi_input(port_index: usize, hub_tx: mpsc::Sender<WireMessage>) -> anyhow::Result<()> {
     let midi_in = MidiInput::new("ensemble-bridge-midi-in")?;
     let ports = midi_in.ports();
@@ -266,6 +301,8 @@ fn spawn_midi_input(port_index: usize, hub_tx: mpsc::Sender<WireMessage>) -> any
                 };
 
                 if let Some(msg) = msg {
+                    // Best-effort: drop on a full buffer rather than block the
+                    // driver callback (see the function docs).
                     let _ = tx.try_send(msg);
                 }
             },
@@ -415,4 +452,158 @@ async fn main() -> anyhow::Result<()> {
 
     eprintln!("MIDI bridge shutting down.");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn play_payload(channel: i64, note: i64, velocity: i64, duration: f64) -> Value {
+        Value::Tuple(vec![
+            Value::Integer(channel),
+            Value::Integer(note),
+            Value::Integer(velocity),
+            Value::Float(FloatValue::new(duration)),
+        ])
+    }
+
+    fn cancel_payload(channel: i64, note: i64) -> Value {
+        Value::Tuple(vec![Value::Integer(channel), Value::Integer(note)])
+    }
+
+    fn cc_payload(channel: i64, cc: i64, val: i64) -> Value {
+        Value::Tuple(vec![
+            Value::Integer(channel),
+            Value::Integer(cc),
+            Value::Integer(val),
+        ])
+    }
+
+    #[test]
+    fn play_accepts_valid_payload() {
+        let (channel, note, velocity, duration) =
+            parse_play_payload(&play_payload(0, 60, 100, 0.5)).unwrap();
+        assert_eq!((channel, note, velocity), (0, 60, 100));
+        assert!((duration - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn play_accepts_boundary_values() {
+        assert!(parse_play_payload(&play_payload(15, 127, 127, 0.0)).is_some());
+        assert!(parse_play_payload(&play_payload(0, 0, 0, 0.0)).is_some());
+    }
+
+    #[test]
+    fn play_rejects_out_of_range_channel() {
+        assert!(parse_play_payload(&play_payload(16, 60, 100, 0.5)).is_none());
+        assert!(parse_play_payload(&play_payload(-1, 60, 100, 0.5)).is_none());
+        assert!(parse_play_payload(&play_payload(i64::MAX, 60, 100, 0.5)).is_none());
+    }
+
+    #[test]
+    fn play_rejects_out_of_range_note_and_velocity() {
+        assert!(parse_play_payload(&play_payload(0, 128, 100, 0.5)).is_none());
+        assert!(parse_play_payload(&play_payload(0, -1, 100, 0.5)).is_none());
+        assert!(parse_play_payload(&play_payload(0, 60, 128, 0.5)).is_none());
+        assert!(parse_play_payload(&play_payload(0, 60, -1, 0.5)).is_none());
+    }
+
+    #[test]
+    fn play_rejects_bad_duration() {
+        // Negative durations would panic `Duration::from_secs_f64`.
+        assert!(parse_play_payload(&play_payload(0, 60, 100, -0.5)).is_none());
+        // Non-finite durations likewise.
+        assert!(parse_play_payload(&play_payload(0, 60, 100, f64::NAN)).is_none());
+        assert!(parse_play_payload(&play_payload(0, 60, 100, f64::INFINITY)).is_none());
+        assert!(parse_play_payload(&play_payload(0, 60, 100, f64::NEG_INFINITY)).is_none());
+    }
+
+    #[test]
+    fn play_rejects_wrong_types_and_arity() {
+        // Too few elements.
+        assert!(parse_play_payload(&Value::Tuple(vec![
+            Value::Integer(0),
+            Value::Integer(60),
+            Value::Integer(100),
+        ]))
+        .is_none());
+        // Duration must be a Float.
+        assert!(parse_play_payload(&Value::Tuple(vec![
+            Value::Integer(0),
+            Value::Integer(60),
+            Value::Integer(100),
+            Value::Integer(1),
+        ]))
+        .is_none());
+        // Channel must be an Integer.
+        assert!(parse_play_payload(&Value::Tuple(vec![
+            Value::Float(FloatValue::new(0.0)),
+            Value::Integer(60),
+            Value::Integer(100),
+            Value::Float(FloatValue::new(0.5)),
+        ]))
+        .is_none());
+        // Not a tuple at all.
+        assert!(parse_play_payload(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn cancel_accepts_valid_payload() {
+        assert_eq!(parse_cancel_payload(&cancel_payload(0, 60)), Some((0, 60)));
+        assert_eq!(
+            parse_cancel_payload(&cancel_payload(15, 127)),
+            Some((15, 127))
+        );
+    }
+
+    #[test]
+    fn cancel_rejects_out_of_range() {
+        assert!(parse_cancel_payload(&cancel_payload(16, 60)).is_none());
+        assert!(parse_cancel_payload(&cancel_payload(-1, 60)).is_none());
+        assert!(parse_cancel_payload(&cancel_payload(0, 128)).is_none());
+        assert!(parse_cancel_payload(&cancel_payload(0, -1)).is_none());
+    }
+
+    #[test]
+    fn cancel_rejects_wrong_arity() {
+        assert!(parse_cancel_payload(&Value::Tuple(vec![Value::Integer(0)])).is_none());
+        assert!(parse_cancel_payload(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn cc_accepts_valid_payload() {
+        assert_eq!(parse_cc_payload(&cc_payload(0, 7, 100)), Some((0, 7, 100)));
+        assert_eq!(
+            parse_cc_payload(&cc_payload(15, 127, 127)),
+            Some((15, 127, 127))
+        );
+    }
+
+    #[test]
+    fn cc_rejects_out_of_range() {
+        assert!(parse_cc_payload(&cc_payload(16, 7, 100)).is_none());
+        assert!(parse_cc_payload(&cc_payload(-1, 7, 100)).is_none());
+        assert!(parse_cc_payload(&cc_payload(0, 128, 100)).is_none());
+        assert!(parse_cc_payload(&cc_payload(0, -1, 100)).is_none());
+        assert!(parse_cc_payload(&cc_payload(0, 7, 128)).is_none());
+        assert!(parse_cc_payload(&cc_payload(0, 7, -1)).is_none());
+    }
+
+    #[test]
+    fn cc_rejects_wrong_types_and_arity() {
+        assert!(
+            parse_cc_payload(&Value::Tuple(vec![Value::Integer(0), Value::Integer(7),])).is_none()
+        );
+        assert!(parse_cc_payload(&Value::Tuple(vec![
+            Value::Integer(0),
+            Value::Integer(7),
+            Value::String("100".into()),
+        ]))
+        .is_none());
+        assert!(parse_cc_payload(&Value::Null).is_none());
+    }
 }
