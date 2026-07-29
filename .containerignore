@@ -1,0 +1,3 @@
+# Keep the Windows build artefacts and VCS data out of the Linux image.
+target
+.git

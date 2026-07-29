@@ -1,0 +1,22 @@
+# Linux build + test image for Ensemble pre-release verification.
+#
+# Builds the workspace and runs the full test suite, catching Linux-only
+# failures (e.g. the MIDI bridge's ALSA dependency) before a release is
+# tagged. See scripts/linux-test.ps1 for the runner.
+FROM docker.io/library/rust:slim-bookworm
+
+# ALSA dev libraries for the MIDI bridge (midir), plus pkg-config.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libasound2-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /ensemble
+
+# The Podman machine has limited RAM — cap parallel rustc jobs.
+ENV CARGO_BUILD_JOBS=4
+
+COPY . .
+
+# Default: run the full workspace test suite single-threaded (the discovery
+# tests use process-global environment variables).
+CMD ["cargo", "test", "--workspace", "--", "--test-threads=1"]
