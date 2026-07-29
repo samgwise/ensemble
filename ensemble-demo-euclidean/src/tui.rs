@@ -48,9 +48,14 @@ fn draw(frame: &mut Frame, state: &AppState) {
 
 /// Draw the header bar.
 fn draw_header(frame: &mut Frame, state: &AppState, area: Rect) {
+    let status = if state.paused { "PAUSED" } else { "RUNNING" };
     let header = Paragraph::new(format!(
-        " Euclidean Generator | Voice #{} | BPM: {:.0} | Steps: {} | Hits: {}",
-        state.hub.voice_id, state.scheduler.bpm, state.scheduler.steps, state.scheduler.hits
+        " Euclidean Generator | Voice #{} | {} | BPM: {:.0} | Steps: {} | Hits: {}",
+        state.hub.voice_id,
+        status,
+        state.scheduler.bpm,
+        state.scheduler.steps,
+        state.scheduler.hits
     ))
     .style(Style::default().fg(Color::Cyan))
     .block(
@@ -128,10 +133,10 @@ fn draw_controls(frame: &mut Frame, area: Rect) {
             Span::raw(" Rotation"),
         ]),
         Line::from(vec![
-            Span::styled("[B]", Style::default().fg(Color::Yellow)),
-            Span::raw(" BPM ±10  "),
-            Span::styled("[b]", Style::default().fg(Color::Yellow)),
+            Span::styled("[B/b]", Style::default().fg(Color::Yellow)),
             Span::raw(" BPM ±1  "),
+            Span::styled("[Shift+B/b]", Style::default().fg(Color::Yellow)),
+            Span::raw(" BPM ±10  "),
             Span::styled("[O]", Style::default().fg(Color::Yellow)),
             Span::raw(" Edit output"),
         ]),
@@ -164,16 +169,14 @@ async fn handle_input(state: &mut AppState, key: event::KeyEvent) {
         // Steps: left/right arrows (without Shift)
         KeyCode::Left if !key.modifiers.contains(event::KeyModifiers::SHIFT) => {
             if state.scheduler.steps > 1 {
-                state.scheduler.steps -= 1;
-                if state.scheduler.current_step >= state.scheduler.steps {
-                    state.scheduler.current_step = 0;
-                }
+                // set_steps also clamps hits so euclidean() can never panic.
+                state.scheduler.set_steps(state.scheduler.steps - 1);
                 state.publish_params().await;
             }
         }
         KeyCode::Right if !key.modifiers.contains(event::KeyModifiers::SHIFT) => {
             if state.scheduler.steps < 64 {
-                state.scheduler.steps += 1;
+                state.scheduler.set_steps(state.scheduler.steps + 1);
                 state.publish_params().await;
             }
         }
@@ -204,23 +207,28 @@ async fn handle_input(state: &mut AppState, key: event::KeyEvent) {
             state.publish_params().await;
         }
 
-        // BPM: B (±10), b (±1)
-        KeyCode::Char('B') => {
-            state.scheduler.bpm = (state.scheduler.bpm + 10.0).min(300.0);
-            state.publish_params().await;
-        }
-        KeyCode::Char('b') => {
-            if key.modifiers.contains(event::KeyModifiers::SHIFT) {
-                state.scheduler.bpm = (state.scheduler.bpm - 10.0).max(20.0);
+        // BPM: case selects direction (B up, b down), Shift selects a
+        // ±10 step instead of ±1. Matching both cases in one arm keeps the
+        // Shift branch reachable regardless of how the terminal reports
+        // shifted letters.
+        KeyCode::Char(c @ ('b' | 'B')) => {
+            let step = if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+                10.0
             } else {
-                state.scheduler.bpm = (state.scheduler.bpm - 1.0).max(20.0);
+                1.0
+            };
+            if c.is_uppercase() {
+                state.scheduler.bpm = (state.scheduler.bpm + step).min(300.0);
+            } else {
+                state.scheduler.bpm = (state.scheduler.bpm - step).max(20.0);
             }
             state.publish_params().await;
         }
 
-        // Pause/Resume: Space
+        // Pause/Resume: Space (the scheduler task stays alive while paused,
+        // so resuming is always possible).
         KeyCode::Char(' ') => {
-            state.running = !state.running;
+            state.paused = !state.paused;
         }
 
         _ => {}
@@ -231,13 +239,34 @@ async fn handle_input(state: &mut AppState, key: event::KeyEvent) {
 // TUI loop
 // ---------------------------------------------------------------------------
 
+/// RAII guard that restores the terminal on drop.
+///
+/// Ensures raw mode is disabled and the alternate screen is left even when
+/// the TUI exits via an error or a panic, so the user's terminal is never
+/// stranded.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    /// Enter raw mode and switch to the alternate screen.
+    fn new() -> Result<Self> {
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
 /// Run the TUI.
 pub async fn run_tui(state: Arc<Mutex<AppState>>) -> Result<()> {
-    // Set up terminal.
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
+    // Set up the terminal; the guard restores it on every exit path.
+    let _guard = TerminalGuard::new()?;
+    let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
     loop {
@@ -260,10 +289,6 @@ pub async fn run_tui(state: Arc<Mutex<AppState>>) -> Result<()> {
             }
         }
     }
-
-    // Restore terminal.
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
     Ok(())
 }

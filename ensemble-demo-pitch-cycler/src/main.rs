@@ -26,7 +26,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use ensemble_client::Hub;
 use ensemble_core::protocol::*;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, watch, Mutex};
 
 use tui::run_tui;
 
@@ -34,10 +34,16 @@ use tui::run_tui;
 // Shared state
 // ---------------------------------------------------------------------------
 
-/// Shared state between the TUI, event listener, and hub connection.
+/// Shared state between the TUI and the event listener.
+///
+/// The `Hub` itself is deliberately NOT kept here: it lives in the event
+/// listener task so that `recv_action().await` never runs while this state
+/// mutex is held. Sends go through the cheap channel clone in `tx`.
 pub struct AppState {
-    /// Hub connection.
-    pub hub: Hub,
+    /// Our assigned voice ID (for display).
+    pub voice_id: VoiceId,
+    /// Channel to the hub's writer task, for sending actions.
+    pub tx: mpsc::Sender<WireMessage>,
     /// Pitch pattern (MIDI note numbers).
     pub pattern: Vec<i64>,
     /// Current index into the pattern.
@@ -54,15 +60,14 @@ pub struct AppState {
     pub velocity: i64,
     /// Note duration in seconds.
     pub duration: f64,
-    /// Whether the app should quit.
-    pub should_quit: bool,
 }
 
 impl AppState {
     /// Create a new app state with default values.
-    pub fn new(hub: Hub) -> Self {
+    pub fn new(voice_id: VoiceId, tx: mpsc::Sender<WireMessage>) -> Self {
         Self {
-            hub,
+            voice_id,
+            tx,
             pattern: vec![60, 64, 67, 72], // C major arpeggio
             current_index: 0,
             last_pitch: None,
@@ -71,18 +76,20 @@ impl AppState {
             channel: 0,
             velocity: 100,
             duration: 0.2,
-            should_quit: false,
         }
     }
 
     /// Publish all current params to the hub.
+    ///
+    /// Params are sent with timestamp 0.0 (immediate dispatch): they are
+    /// interactive edits and must never be scheduled into the future.
     pub async fn publish_params(&self) {
-        let now = self.hub.now().await;
+        let now = 0.0;
 
         let pattern_values: Vec<Value> = self.pattern.iter().map(|&p| Value::Integer(p)).collect();
         let _ = self
-            .hub
-            .send_action(action(
+            .tx
+            .send(action(
                 "/demo/pitch/pattern",
                 SignalType::Param,
                 now,
@@ -91,8 +98,8 @@ impl AppState {
             .await;
 
         let _ = self
-            .hub
-            .send_action(action(
+            .tx
+            .send(action(
                 "/demo/pitch/trigger",
                 SignalType::Param,
                 now,
@@ -101,8 +108,8 @@ impl AppState {
             .await;
 
         let _ = self
-            .hub
-            .send_action(action(
+            .tx
+            .send(action(
                 "/demo/pitch/output",
                 SignalType::Param,
                 now,
@@ -111,8 +118,8 @@ impl AppState {
             .await;
 
         let _ = self
-            .hub
-            .send_action(action(
+            .tx
+            .send(action(
                 "/demo/pitch/channel",
                 SignalType::Param,
                 now,
@@ -121,8 +128,8 @@ impl AppState {
             .await;
 
         let _ = self
-            .hub
-            .send_action(action(
+            .tx
+            .send(action(
                 "/demo/pitch/velocity",
                 SignalType::Param,
                 now,
@@ -131,8 +138,8 @@ impl AppState {
             .await;
 
         let _ = self
-            .hub
-            .send_action(action(
+            .tx
+            .send(action(
                 "/demo/pitch/duration",
                 SignalType::Param,
                 now,
@@ -141,34 +148,21 @@ impl AppState {
             .await;
     }
 
-    /// Advance to the next pitch and send a MIDI note.
-    pub async fn on_trigger(&mut self) {
+    /// Advance to the next pitch in the pattern and return it.
+    ///
+    /// Pure state mutation — the caller performs the actual send so that no
+    /// mutex guard is ever held across a network await. Returns `None` when
+    /// the pattern is empty.
+    pub fn advance_pattern(&mut self) -> Option<i64> {
         if self.pattern.is_empty() {
-            return;
+            return None;
         }
 
         // Get the current pitch and advance.
         let pitch = self.pattern[self.current_index];
         self.last_pitch = Some(pitch);
         self.current_index = (self.current_index + 1) % self.pattern.len();
-
-        // Send MIDI note to the output address.
-        // Format: (channel, pitch, velocity, duration) as a Tuple.
-        let now = self.hub.now().await;
-        let _ = self
-            .hub
-            .send_action(action(
-                &self.output_address,
-                SignalType::Event,
-                now,
-                Value::Tuple(vec![
-                    Value::Integer(self.channel),
-                    Value::Integer(pitch),
-                    Value::Integer(self.velocity),
-                    Value::Float(FloatValue::new(self.duration)),
-                ]),
-            ))
-            .await;
+        Some(pitch)
     }
 }
 
@@ -177,18 +171,27 @@ impl AppState {
 // ---------------------------------------------------------------------------
 
 /// Listen for trigger events and advance the pitch pattern.
-async fn run_event_listener(state: Arc<Mutex<AppState>>) {
+///
+/// Owns the `Hub` so `recv_action().await` can run without any state lock
+/// being held. The state mutex is only ever locked to process an
+/// already-received message, and is released again before any send.
+/// Shutdown is signalled via the `quit` watch channel, so the loop exits
+/// promptly even while blocked in `recv_action()`.
+async fn run_event_listener(
+    mut hub: Hub,
+    state: Arc<Mutex<AppState>>,
+    mut quit: watch::Receiver<bool>,
+) {
     loop {
-        // Receive the next action from the hub.
-        let action_msg = {
-            let mut s = state.lock().await;
-            if s.should_quit {
-                break;
-            }
-            s.hub.recv_action().await
+        let msg = tokio::select! {
+            // Check the quit signal first so shutdown is never delayed by a
+            // message that happens to arrive at the same time.
+            biased;
+            _ = quit.changed() => break,
+            msg = hub.recv_action() => msg,
         };
 
-        let Some(msg) = action_msg else {
+        let Some(msg) = msg else {
             break;
         };
 
@@ -200,14 +203,42 @@ async fn run_event_listener(state: Arc<Mutex<AppState>>) {
         let address = get_string(&map, "address").unwrap_or_default();
         let signal_type = get_string(&map, "signal_type").unwrap_or_default();
 
-        let trigger_addr = {
-            let s = state.lock().await;
-            s.trigger_address.clone()
+        // Lock the state only to process this already-received message.
+        // The guard is dropped before we send anything to the hub.
+        let note = {
+            let mut s = state.lock().await;
+            if address == s.trigger_address && signal_type == "event" {
+                s.advance_pattern().map(|pitch| {
+                    (
+                        s.output_address.clone(),
+                        s.channel,
+                        pitch,
+                        s.velocity,
+                        s.duration,
+                    )
+                })
+            } else {
+                None
+            }
         };
 
-        if address == trigger_addr && signal_type == "event" {
-            let mut s = state.lock().await;
-            s.on_trigger().await;
+        // Send the MIDI note outside the lock.
+        // Format: (channel, pitch, velocity, duration) as a Tuple.
+        if let Some((output, channel, pitch, velocity, duration)) = note {
+            let now = hub.now().await;
+            let _ = hub
+                .send_action(action(
+                    &output,
+                    SignalType::Event,
+                    now,
+                    Value::Tuple(vec![
+                        Value::Integer(channel),
+                        Value::Integer(pitch),
+                        Value::Integer(velocity),
+                        Value::Float(FloatValue::new(duration)),
+                    ]),
+                ))
+                .await;
         }
     }
 }
@@ -222,17 +253,15 @@ async fn main() -> Result<()> {
     let hub = Hub::connect_with_discovery("pitch-cycler").await?;
     eprintln!("Connected to hub as voice #{} — Pitch Cycler", hub.voice_id);
 
-    // Build shared state.
-    let state = Arc::new(Mutex::new(AppState::new(hub)));
+    // Build shared state (the hub stays outside the state mutex).
+    let state = Arc::new(Mutex::new(AppState::new(hub.voice_id, hub.sender())));
 
-    // Subscribe to our trigger address.
-    {
+    // Subscribe to our trigger address before handing the hub to the listener.
+    let trigger_address = {
         let s = state.lock().await;
-        let trigger_pattern = format!("{}/*", s.trigger_address.trim_end_matches('/'));
-        s.hub.subscribe(&s.trigger_address).await?;
-        // Also subscribe to wildcard in case the trigger address is a parent.
-        s.hub.subscribe(&trigger_pattern).await.ok();
-    }
+        s.trigger_address.clone()
+    };
+    hub.subscribe(&trigger_address).await?;
 
     // Publish initial params.
     {
@@ -240,20 +269,24 @@ async fn main() -> Result<()> {
         s.publish_params().await;
     }
 
-    // Spawn the event listener task.
+    // Shutdown signal for the event listener. A watch channel is used so the
+    // listener wakes even while blocked in `recv_action()`, and so main never
+    // needs to lock the state to stop it.
+    let (quit_tx, quit_rx) = watch::channel(false);
+
+    // Spawn the event listener task (takes ownership of the hub).
     let listener_state = state.clone();
-    tokio::spawn(async move {
-        run_event_listener(listener_state).await;
+    let listener = tokio::spawn(async move {
+        run_event_listener(hub, listener_state, quit_rx).await;
     });
 
     // Run the TUI (blocks until quit).
     run_tui(state.clone()).await?;
 
-    // Signal the event listener to stop.
-    {
-        let mut s = state.lock().await;
-        s.should_quit = true;
-    }
+    // Signal the event listener to stop and wait for it, so the hub
+    // connection is dropped (and the voice disconnected) before we exit.
+    let _ = quit_tx.send(true);
+    let _ = listener.await;
 
     eprintln!("Pitch Cycler shutting down.");
     Ok(())

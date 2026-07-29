@@ -60,7 +60,7 @@ fn draw(frame: &mut Frame, state: &AppState) {
 fn draw_header(frame: &mut Frame, state: &AppState, area: Rect) {
     let header = Paragraph::new(format!(
         " Pitch Cycler | Voice #{} | Index: {}/{}",
-        state.hub.voice_id,
+        state.voice_id,
         state.current_index + 1,
         state.pattern.len()
     ))
@@ -167,12 +167,24 @@ fn draw_controls(frame: &mut Frame, area: Rect) {
 // Input handling
 // ---------------------------------------------------------------------------
 
-/// Handle keyboard input.
-async fn handle_input(state: &mut AppState, key: event::KeyEvent) {
+/// Work out the pitch to insert when the user presses Right.
+///
+/// Copies the current pitch up one semitone (or 60 when the pattern is
+/// empty), clamped to the MIDI maximum of 127.
+fn inserted_pitch(pattern: &[i64], current_index: usize) -> i64 {
+    if pattern.is_empty() {
+        60
+    } else {
+        (pattern[current_index] + 1).min(127)
+    }
+}
+
+/// Handle keyboard input. Returns `true` when the user asked to quit.
+async fn handle_input(state: &mut AppState, key: event::KeyEvent) -> bool {
     match key.code {
         // Quit
         KeyCode::Char('q') | KeyCode::Char('Q') => {
-            state.should_quit = true;
+            return true;
         }
 
         // Add/remove pitches: left/right arrows
@@ -193,11 +205,7 @@ async fn handle_input(state: &mut AppState, key: event::KeyEvent) {
         }
         KeyCode::Right => {
             // Add a pitch at the current position (copy of current + 1 semitone, or 60 if empty).
-            let new_pitch = if state.pattern.is_empty() {
-                60
-            } else {
-                state.pattern[state.current_index] + 1
-            };
+            let new_pitch = inserted_pitch(&state.pattern, state.current_index);
             state.pattern.insert(state.current_index, new_pitch);
             state.publish_params().await;
         }
@@ -250,19 +258,42 @@ async fn handle_input(state: &mut AppState, key: event::KeyEvent) {
 
         _ => {}
     }
+
+    false
 }
 
 // ---------------------------------------------------------------------------
 // TUI loop
 // ---------------------------------------------------------------------------
 
+/// RAII guard that restores the terminal on drop.
+///
+/// Ensures raw mode is disabled and the alternate screen is left even when
+/// the TUI exits via an error or a panic, so the user's terminal is never
+/// stranded.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    /// Enter raw mode and switch to the alternate screen.
+    fn new() -> Result<Self> {
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
 /// Run the TUI.
 pub async fn run_tui(state: Arc<Mutex<AppState>>) -> Result<()> {
-    // Set up terminal.
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
+    // Set up the terminal; the guard restores it on every exit path.
+    let _guard = TerminalGuard::new()?;
+    let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
     loop {
@@ -277,8 +308,7 @@ pub async fn run_tui(state: Arc<Mutex<AppState>>) -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     let mut s = state.lock().await;
-                    handle_input(&mut s, key).await;
-                    if s.should_quit {
+                    if handle_input(&mut s, key).await {
                         break;
                     }
                 }
@@ -286,9 +316,26 @@ pub async fn run_tui(state: Arc<Mutex<AppState>>) -> Result<()> {
         }
     }
 
-    // Restore terminal.
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inserted_pitch_empty_pattern() {
+        assert_eq!(inserted_pitch(&[], 0), 60);
+    }
+
+    #[test]
+    fn test_inserted_pitch_copies_up_semitone() {
+        assert_eq!(inserted_pitch(&[60, 64, 67], 1), 65);
+    }
+
+    #[test]
+    fn test_inserted_pitch_clamps_to_127() {
+        // Inserting above the MIDI maximum must clamp, not produce 128.
+        assert_eq!(inserted_pitch(&[126, 127], 1), 127);
+    }
 }

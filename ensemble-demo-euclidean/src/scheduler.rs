@@ -57,6 +57,19 @@ impl SchedulerState {
     pub fn advance(&mut self) {
         self.current_step = (self.current_step + 1) % self.steps;
     }
+
+    /// Set the number of steps per bar.
+    ///
+    /// Clamps `hits` to the new step count so the `euclidean()` invariant
+    /// (`hits <= steps`) always holds, and resets the step position when it
+    /// falls outside the shortened bar.
+    pub fn set_steps(&mut self, steps: usize) {
+        self.steps = steps.max(1);
+        self.hits = self.hits.min(self.steps);
+        if self.current_step >= self.steps {
+            self.current_step = 0;
+        }
+    }
 }
 
 /// Run the scheduler loop.
@@ -66,9 +79,9 @@ impl SchedulerState {
 pub async fn run_scheduler(state: Arc<Mutex<AppState>>) {
     loop {
         // Read current state.
-        let (step_duration, is_hit, _running) = {
+        let (step_duration, is_hit, paused) = {
             let s = state.lock().await;
-            if !s.running {
+            if s.should_quit {
                 break;
             }
             let pattern = s.pattern();
@@ -76,8 +89,15 @@ pub async fn run_scheduler(state: Arc<Mutex<AppState>>) {
                 .get(s.scheduler.current_step)
                 .copied()
                 .unwrap_or(false);
-            (s.scheduler.step_duration(), is_hit, s.running)
+            (s.scheduler.step_duration(), is_hit, s.paused)
         };
+
+        // While paused, keep the task alive but don't fire or advance —
+        // poll again shortly so resume and quit stay responsive.
+        if paused {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
+        }
 
         // If this step is a hit, send a trigger event.
         if is_hit {
@@ -136,5 +156,59 @@ mod tests {
         assert_eq!(state.current_step, 3);
         state.advance();
         assert_eq!(state.current_step, 0); // Wraps around
+    }
+
+    #[test]
+    fn test_set_steps_clamps_hits() {
+        let mut state = SchedulerState {
+            bpm: 120.0,
+            steps: 16,
+            hits: 12,
+            rotation: 0,
+            output_address: "/test".to_string(),
+            current_step: 0,
+        };
+
+        // Reducing steps below hits must clamp hits so euclidean() can't panic.
+        state.set_steps(4);
+        assert_eq!(state.steps, 4);
+        assert_eq!(state.hits, 4);
+
+        // Growing steps again leaves hits alone.
+        state.set_steps(16);
+        assert_eq!(state.hits, 4);
+    }
+
+    #[test]
+    fn test_set_steps_resets_out_of_range_step() {
+        let mut state = SchedulerState {
+            bpm: 120.0,
+            steps: 16,
+            hits: 4,
+            rotation: 0,
+            output_address: "/test".to_string(),
+            current_step: 12,
+        };
+
+        state.set_steps(8);
+        assert_eq!(state.current_step, 0);
+        assert_eq!(state.hits, 4);
+    }
+
+    #[test]
+    fn test_set_steps_minimum_one() {
+        let mut state = SchedulerState {
+            bpm: 120.0,
+            steps: 16,
+            hits: 4,
+            rotation: 0,
+            output_address: "/test".to_string(),
+            current_step: 0,
+        };
+
+        // Steps can never drop to zero (euclidean() asserts steps > 0).
+        state.set_steps(0);
+        assert_eq!(state.steps, 1);
+        assert_eq!(state.hits, 1);
     }
 }
