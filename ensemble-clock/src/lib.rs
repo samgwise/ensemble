@@ -2,6 +2,18 @@
 //!
 //! Uses a min-RTT filter to estimate the offset between a voice's local
 //! clock and the hub's reference clock, similar to O2/NTP.
+//!
+//! The best sample is windowed: if the minimum RTT has not improved for
+//! [`MIN_RTT_WINDOW`], the filter resets so the offset can re-converge after
+//! network changes (e.g. a route change that raises the achievable RTT).
+
+use std::time::{Duration, Instant};
+
+/// How long the best RTT sample may go unimproved before the filter resets.
+///
+/// After this window the minimum RTT is forgotten and the next valid sample
+/// becomes the new best, letting the offset estimate track network changes.
+pub const MIN_RTT_WINDOW: Duration = Duration::from_secs(10);
 
 /// Tracks clock offset between a voice's local clock and the hub's clock.
 ///
@@ -16,6 +28,10 @@ pub struct ClockSync {
     min_rtt: f64,
     /// Whether we've completed at least one sync.
     synced: bool,
+    /// When the current best sample was recorded. Used to expire the
+    /// min-RTT filter so a stale best sample doesn't pin the offset
+    /// forever after network conditions change.
+    best_sample_at: Option<Instant>,
 }
 
 impl ClockSync {
@@ -25,6 +41,7 @@ impl ClockSync {
             offset: 0.0,
             min_rtt: f64::MAX,
             synced: false,
+            best_sample_at: None,
         }
     }
 
@@ -64,6 +81,37 @@ impl ClockSync {
         hub_send_time: f64,
         voice_receive_time: f64,
     ) -> bool {
+        self.process_reply_at(
+            voice_send_time,
+            hub_receive_time,
+            hub_send_time,
+            voice_receive_time,
+            Instant::now(),
+        )
+    }
+
+    /// Inner implementation of [`ClockSync::process_reply`] with an explicit
+    /// timestamp, kept separate so the window expiry logic can be tested
+    /// without waiting out real time.
+    fn process_reply_at(
+        &mut self,
+        voice_send_time: f64,
+        hub_receive_time: f64,
+        hub_send_time: f64,
+        voice_receive_time: f64,
+        now: Instant,
+    ) -> bool {
+        // Expire the best sample if it has gone unimproved for the window.
+        // The offset estimate itself is kept — it remains the best guess
+        // until a fresh sample replaces it — but the RTT filter forgets the
+        // stale best so a new (possibly worse) baseline can be established.
+        if let Some(best_at) = self.best_sample_at {
+            if now.duration_since(best_at) >= MIN_RTT_WINDOW {
+                self.min_rtt = f64::MAX;
+                self.best_sample_at = None;
+            }
+        }
+
         // RTT excluding hub processing time.
         let rtt = (voice_receive_time - voice_send_time) - (hub_send_time - hub_receive_time);
 
@@ -73,6 +121,7 @@ impl ClockSync {
             // Offset estimated at the midpoint of the round trip.
             self.offset = hub_receive_time - voice_send_time - (rtt / 2.0);
             self.synced = true;
+            self.best_sample_at = Some(now);
             return true;
         }
 
@@ -174,6 +223,88 @@ mod tests {
         // RTT = (1.1 - 1.0) - (6.5 - 6.0) = 0.1 - 0.5 = -0.4
         assert!(!updated);
         assert!(!cs.is_synced());
+    }
+
+    #[test]
+    fn stale_best_sample_resets_min_rtt() {
+        let mut cs = ClockSync::new();
+        let t0 = Instant::now();
+
+        // Good sample at t0: RTT 0.002.
+        assert!(cs.process_reply_at(1.0, 6.001, 6.002, 1.003, t0));
+        let good_rtt = cs.min_rtt();
+
+        // Within the window a worse sample is ignored as jitter.
+        let t1 = t0 + Duration::from_secs(5);
+        assert!(!cs.process_reply_at(2.0, 7.010, 7.010, 2.020, t1)); // RTT 0.020
+        assert_eq!(cs.min_rtt(), good_rtt);
+
+        // After the window lapses without improvement the filter resets, so
+        // the next sample becomes the new best even though its RTT is worse.
+        let t2 = t0 + MIN_RTT_WINDOW + Duration::from_secs(1);
+        assert!(cs.process_reply_at(3.0, 8.010, 8.010, 3.020, t2)); // RTT 0.020
+        assert!(cs.min_rtt() > good_rtt);
+    }
+
+    #[test]
+    fn reconverges_after_network_change() {
+        let mut cs = ClockSync::new();
+        let t0 = Instant::now();
+
+        // Initial network: symmetric 1ms each way, true offset 5.0.
+        assert!(cs.process_reply_at(0.0, 5.001, 5.001, 0.002, t0));
+        assert!((cs.offset() - 5.0).abs() < 1e-9);
+
+        // Network change: path becomes slow and asymmetric (45ms out, 5ms
+        // back, RTT 0.050). Within the window these samples look like jitter
+        // and are ignored; the stale offset persists.
+        let t1 = t0 + Duration::from_secs(2);
+        assert!(!cs.process_reply_at(10.0, 15.045, 15.045, 10.050, t1));
+        assert!((cs.offset() - 5.0).abs() < 1e-9);
+
+        // Once the window expires the filter resets and the same sample
+        // profile is accepted, re-converging the offset onto the new
+        // (asymmetric) network conditions.
+        let t2 = t0 + MIN_RTT_WINDOW + Duration::from_secs(1);
+        assert!(cs.process_reply_at(20.0, 25.045, 25.045, 20.050, t2));
+        // RTT = 0.050; offset = 25.045 - 20.0 - 0.025 = 5.020.
+        assert!((cs.min_rtt() - 0.050).abs() < 1e-9);
+        assert!((cs.offset() - 5.020).abs() < 1e-9);
+    }
+
+    #[test]
+    fn improvements_extend_the_window() {
+        let mut cs = ClockSync::new();
+        let t0 = Instant::now();
+
+        // Best sample at t0: RTT 0.020.
+        assert!(cs.process_reply_at(0.0, 5.010, 5.010, 0.020, t0));
+
+        // An improvement 9s later pushes the window out: it is the time since
+        // the last improvement that matters, not the age of the first sample.
+        let t1 = t0 + Duration::from_secs(9);
+        assert!(cs.process_reply_at(1.0, 6.005, 6.005, 1.010, t1)); // RTT 0.010
+
+        // 18s after the first sample but only 9s after the last improvement,
+        // the filter has not reset: a middling sample is still ignored.
+        let t2 = t1 + Duration::from_secs(9);
+        assert!(!cs.process_reply_at(2.0, 7.0075, 7.0075, 2.015, t2)); // RTT 0.015
+        assert!((cs.min_rtt() - 0.010).abs() < 1e-9);
+    }
+
+    #[test]
+    fn synced_state_survives_window_expiry() {
+        let mut cs = ClockSync::new();
+        let t0 = Instant::now();
+
+        assert!(cs.process_reply_at(1.0, 6.001, 6.002, 1.003, t0));
+        assert!(cs.is_synced());
+
+        // Expiring the filter resets min_rtt but keeps the voice synced: the
+        // last offset estimate remains the best available guess.
+        let t1 = t0 + MIN_RTT_WINDOW + Duration::from_secs(1);
+        assert!(cs.process_reply_at(2.0, 7.050, 7.050, 2.100, t1)); // RTT 0.100
+        assert!(cs.is_synced());
     }
 
     #[test]
