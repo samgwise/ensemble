@@ -84,6 +84,27 @@ pub async fn forward_to_remote(
     Ok(())
 }
 
+/// Forward a param unset from the local hub to remote peers.
+///
+/// The address is translated through the outbound mapping rules (unsets are
+/// param semantics, so the signal filter sees "param"); addresses with no
+/// matching rule are dropped like any other unmapped traffic.
+pub fn forward_unset_to_remote(
+    address: &str,
+    engine: &MappingEngine,
+    origin: &str,
+    outbound_tx: &broadcast::Sender<WireMessage>,
+) {
+    use crate::mapping::Direction;
+    use crate::protocol::bridge_unset;
+
+    if let Some(mapped_address) = engine.map(address, Direction::Outbound, Some("param")) {
+        let bridge_msg = bridge_unset(origin, 0, &mapped_address);
+        // Broadcast to all peers (ignore error if no receivers).
+        let _ = outbound_tx.send(bridge_msg);
+    }
+}
+
 /// Forward an action from a remote peer to the local hub.
 #[allow(dead_code)]
 pub async fn forward_to_local(
@@ -92,13 +113,10 @@ pub async fn forward_to_local(
     hub: &Hub,
 ) -> Result<()> {
     use crate::mapping::Direction;
-    use crate::protocol::{
-        get_action_payload, get_address, get_signal_type, get_source, get_timestamp,
-    };
+    use crate::protocol::{get_action_payload, get_address, get_signal_type, get_source};
 
     let address = get_address(bridge_msg).unwrap_or_default();
     let signal_type_str = get_signal_type(bridge_msg).unwrap_or_else(|| "event".to_string());
-    let timestamp = get_timestamp(bridge_msg);
     let source = get_source(bridge_msg);
     let payload = get_action_payload(bridge_msg);
 
@@ -111,7 +129,10 @@ pub async fn forward_to_local(
 
     // Map the address (inbound direction).
     if let Some(mapped_address) = engine.map(&address, Direction::Inbound, Some(&signal_type_str)) {
-        let action = action_with_source(source, &mapped_address, signal_type, timestamp, payload);
+        // Forwarded as immediate (timestamp 0.0): the wire timestamp is in
+        // the sending hub's clock domain, which we cannot honour locally
+        // without clock synchronisation (deferred enhancement).
+        let action = action_with_source(source, &mapped_address, signal_type, 0.0, payload);
 
         if let Err(e) = hub.send_action(action).await {
             eprintln!("Failed to forward action to local hub: {}", e);

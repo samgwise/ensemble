@@ -1,19 +1,21 @@
 //! Bridge run loop and test helpers.
 
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use anyhow::Result;
+use ensemble_client::Hub;
 use ensemble_core::protocol::*;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::config::Config;
+use crate::config::{Config, LocalConfig};
 use crate::loop_guard::LoopGuard;
 use crate::mapping::MappingEngine;
 use crate::param_cache::ParamCache;
-use crate::peer_manager::PeerManager;
+use crate::peer_manager::{self, PeerManager};
 use crate::remote_peer::{self, HubSink, RemotePeer};
 
 /// Handle to a running bridge instance (used by integration tests).
@@ -53,8 +55,9 @@ pub async fn start_bridge(config: Config) -> Result<BridgeHandle> {
 /// Run the bridge until a shutdown signal is received.
 ///
 /// If `shutdown` is `None`, the function waits for `Ctrl+C`. If `ready_tx` is
-/// provided, it is sent the actual listener port as soon as the QUIC endpoint
-/// is bound.
+/// provided, it is sent the actual listener port once the QUIC endpoint is
+/// bound *and* the local hub connection has been established for the first
+/// time.
 pub async fn run_bridge(
     config: Config,
     mut shutdown: Option<mpsc::Receiver<()>>,
@@ -62,9 +65,15 @@ pub async fn run_bridge(
 ) -> Result<()> {
     eprintln!("Ensemble Remote Bridge");
     eprintln!("Bridge name: {}", config.bridge.name);
-    eprintln!("Listen port: {}", config.bridge.listen_port);
+    eprintln!(
+        "Listen address: {}:{}",
+        config.bridge.listen_addr, config.bridge.listen_port
+    );
     eprintln!("Peers: {}", config.peer.len());
     eprintln!("Mapping rules: {}", config.mapping.len());
+    if config.bridge.auth_token.is_some() {
+        eprintln!("Authentication: shared secret enabled");
+    }
 
     // Cancellation token and task tracker used to stop and await all spawned
     // tasks on shutdown.
@@ -79,12 +88,6 @@ pub async fn run_bridge(
     let outbound_count = engine.outbound_patterns().len();
     eprintln!("Outbound subscription patterns: {}", outbound_count);
 
-    // Connect to local hub.
-    let mut hub = crate::local_hub::connect_to_hub(&config.local, &config.bridge.name).await?;
-
-    // Subscribe to outbound patterns.
-    crate::local_hub::subscribe_to_patterns(&hub, &engine).await?;
-
     // Create broadcast channel for outbound actions (local hub → all remote peers).
     let (outbound_tx, _) = broadcast::channel::<WireMessage>(1000);
 
@@ -94,6 +97,9 @@ pub async fn run_bridge(
 
     // Cache of current param values for replay to newly connected peers.
     let param_cache = ParamCache::new();
+
+    // Tracks open inbound connections so the listener can enforce its cap.
+    let inbound_gauge = Arc::new(AtomicUsize::new(0));
 
     // Create the peer manager to orchestrate inbound and outbound connections.
     let manager = PeerManager::new(
@@ -106,21 +112,23 @@ pub async fn run_bridge(
         param_cache.clone(),
         cancel.clone(),
         tracker.clone(),
+        config.bridge.auth_token.clone(),
+        inbound_gauge.clone(),
     );
     let manager_handle = manager.handle();
 
     // Start QUIC listener and register accepted peers with the manager.
     let (peer_tx, mut peer_rx) = mpsc::channel::<RemotePeer>(100);
     let listener_port = remote_peer::start_listener(
+        &config.bridge.listen_addr,
         config.bridge.listen_port,
         peer_tx,
+        inbound_gauge,
+        config.bridge.max_inbound,
         cancel.clone(),
         tracker.clone(),
     )
     .await?;
-    if let Some(tx) = ready_tx {
-        let _ = tx.send(listener_port);
-    }
 
     // Register inbound peers with the manager until shutdown.
     let register_handle = manager_handle.clone();
@@ -144,62 +152,58 @@ pub async fn run_bridge(
         manager.run().await;
     });
 
-    // Get a sender clone for sending actions back to the hub.
-    let hub_sender = hub.sender();
+    // Supervise the local hub connection: reconnect with exponential backoff
+    // and resubscribe when the hub drops, matching peer behaviour, rather
+    // than leaving the bridge running with no local attachment. The current
+    // hub sender is published through a watch channel so the inbound
+    // forwarder always delivers to the live connection.
+    let (hub_sender_tx, hub_sender_rx) = watch::channel::<Option<mpsc::Sender<WireMessage>>>(None);
+    let (hub_ready_tx, hub_ready_rx) = oneshot::channel::<()>();
+    {
+        let local = config.local.clone();
+        let name = config.bridge.name.clone();
+        let engine = engine.clone();
+        let outbound_tx = outbound_tx.clone();
+        let param_cache = param_cache.clone();
+        let origin = guard.bridge_id().to_string();
+        let hub_cancel = cancel.clone();
+        tracker.spawn(async move {
+            supervise_local_hub(
+                local,
+                name,
+                engine,
+                outbound_tx,
+                param_cache,
+                origin,
+                hub_sender_tx,
+                Some(hub_ready_tx),
+                hub_cancel,
+            )
+            .await;
+        });
+    }
 
-    // Forward actions from local hub to broadcast (→ all peers),
-    // keeping the param cache up to date for future peer replays.
-    let origin = guard.bridge_id().to_string();
-    let engine_for_hub = engine.clone();
-    let outbound_tx_hub = outbound_tx.clone();
-    let param_cache_hub = param_cache.clone();
-    let hub_forward_cancel = cancel.clone();
-    tracker.spawn(async move {
-        loop {
-            tokio::select! {
-                msg = hub.recv_action() => {
-                    match msg {
-                        Some(msg) => match msg.msg_type.as_str() {
-                            MSG_UNSET_PARAM => {
-                                if let Some(address) = crate::protocol::get_address(&msg) {
-                                    param_cache_hub.remove(&address);
-                                }
-                            }
-                            MSG_ACTION => {
-                                param_cache_hub.update(&msg);
-                                if let Err(e) = crate::local_hub::forward_to_remote(
-                                    &msg,
-                                    &engine_for_hub,
-                                    &origin,
-                                    &outbound_tx_hub,
-                                )
-                                .await
-                                {
-                                    eprintln!("Error forwarding to remote: {}", e);
-                                }
-                            }
-                            other => {
-                                eprintln!("Unexpected message from local hub: {}", other);
-                            }
-                        }
-                        None => break,
-                    }
-                }
-                _ = hub_forward_cancel.cancelled() => break,
-            }
-        }
-    });
-
-    // Forward inbound actions from peers to local hub.
+    // Forward inbound actions from peers to the local hub.
     let inbound_forward_cancel = cancel.clone();
     tracker.spawn(async move {
+        let hub_sender_rx = hub_sender_rx;
         loop {
             tokio::select! {
                 action = inbound_rx.recv() => {
                     match action {
                         Some(action) => {
-                            if let Err(e) = hub_sender.send(action).await {
-                                eprintln!("Error sending to local hub: {}", e);
+                            let sender = hub_sender_rx.borrow().clone();
+                            match sender {
+                                Some(tx) => {
+                                    if let Err(e) = tx.send(action).await {
+                                        eprintln!("Error sending to local hub: {}", e);
+                                    }
+                                }
+                                None => {
+                                    eprintln!(
+                                        "Local hub unavailable; dropping inbound action"
+                                    );
+                                }
                             }
                         }
                         None => break,
@@ -209,6 +213,15 @@ pub async fn run_bridge(
             }
         }
     });
+
+    // Embedded callers (integration tests) wait for the first successful hub
+    // connection before the bridge reports ready, so forwarding works as soon
+    // as `listen_port` is usable. The standalone binary does not gate
+    // startup on the hub being reachable.
+    if let Some(ready_tx) = ready_tx {
+        let _ = hub_ready_rx.await;
+        let _ = ready_tx.send(listener_port);
+    }
 
     eprintln!(
         "Bridge ready on port {}. Waiting for shutdown.",
@@ -234,4 +247,126 @@ pub async fn run_bridge(
     tracker.wait().await;
 
     Ok(())
+}
+
+/// Supervise the local hub connection.
+///
+/// Connects, subscribes to the outbound mapping patterns, and forwards hub
+/// traffic until the connection drops — then reconnects with exponential
+/// backoff (matching peer behaviour) and resubscribes. Reconnect attempts
+/// are unbounded: a hub that is simply restarted must not permanently
+/// detach the bridge, so every failure is logged with its attempt number
+/// rather than treated as fatal. `ready_notify` (if provided) is signalled
+/// after the first successful connection only.
+#[allow(clippy::too_many_arguments)]
+async fn supervise_local_hub(
+    local: LocalConfig,
+    name: String,
+    engine: Arc<MappingEngine>,
+    outbound_tx: broadcast::Sender<WireMessage>,
+    param_cache: ParamCache,
+    origin: String,
+    hub_sender_tx: watch::Sender<Option<mpsc::Sender<WireMessage>>>,
+    mut ready_notify: Option<oneshot::Sender<()>>,
+    cancel: CancellationToken,
+) {
+    let mut attempt: u32 = 0;
+    loop {
+        if attempt > 0 {
+            tokio::select! {
+                _ = tokio::time::sleep(peer_manager::backoff_delay(attempt)) => {}
+                _ = cancel.cancelled() => return,
+            }
+        }
+
+        let hub = match crate::local_hub::connect_to_hub(&local, &name).await {
+            Ok(hub) => hub,
+            Err(e) => {
+                attempt = attempt.saturating_add(1);
+                eprintln!("Local hub connect failed (attempt {}): {}", attempt, e);
+                continue;
+            }
+        };
+
+        if let Err(e) = crate::local_hub::subscribe_to_patterns(&hub, &engine).await {
+            attempt = attempt.saturating_add(1);
+            eprintln!("Local hub subscribe failed (attempt {}): {}", attempt, e);
+            continue;
+        }
+
+        eprintln!("Local hub connection established");
+        attempt = 0;
+        // Publish the new sender so the inbound forwarder can deliver, and
+        // tell any embedded caller the bridge is usable.
+        let _ = hub_sender_tx.send(Some(hub.sender()));
+        if let Some(notify) = ready_notify.take() {
+            let _ = notify.send(());
+        }
+
+        let shutdown =
+            forward_from_hub(hub, &engine, &outbound_tx, &param_cache, &origin, &cancel).await;
+
+        // The connection ended: withdraw the sender so the inbound forwarder
+        // stops delivering to a dead hub.
+        let _ = hub_sender_tx.send(None);
+        if shutdown {
+            return;
+        }
+        attempt = attempt.saturating_add(1);
+        eprintln!(
+            "Local hub disconnected; reconnecting with backoff (attempt {})",
+            attempt
+        );
+    }
+}
+
+/// Forward actions from the local hub to remote peers until the hub
+/// disconnects or shutdown begins. Returns `true` if shutdown was requested.
+async fn forward_from_hub(
+    mut hub: Hub,
+    engine: &Arc<MappingEngine>,
+    outbound_tx: &broadcast::Sender<WireMessage>,
+    param_cache: &ParamCache,
+    origin: &str,
+    cancel: &CancellationToken,
+) -> bool {
+    loop {
+        tokio::select! {
+            msg = hub.recv_action() => {
+                match msg {
+                    Some(msg) => match msg.msg_type.as_str() {
+                        MSG_UNSET_PARAM => {
+                            if let Some(address) = crate::protocol::get_address(&msg) {
+                                param_cache.remove(&address);
+                                crate::local_hub::forward_unset_to_remote(
+                                    &address,
+                                    engine,
+                                    origin,
+                                    outbound_tx,
+                                );
+                            }
+                        }
+                        MSG_ACTION => {
+                            param_cache.update(&msg);
+                            if let Err(e) = crate::local_hub::forward_to_remote(
+                                &msg,
+                                engine,
+                                origin,
+                                outbound_tx,
+                            )
+                            .await
+                            {
+                                eprintln!("Error forwarding to remote: {}", e);
+                            }
+                        }
+                        other => {
+                            eprintln!("Unexpected message from local hub: {}", other);
+                        }
+                    },
+                    None => return false,
+                }
+            }
+            _ = cancel.cancelled() => return true,
+        }
+    }
 }

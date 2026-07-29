@@ -99,6 +99,9 @@ impl MappingEngine {
     /// Returns the mapped address if a matching rule is found, or `None` if no
     /// rule matches. The first matching rule wins.
     ///
+    /// The query direction must be concrete (`Outbound` or `Inbound`):
+    /// `Direction::Both` describes a rule, not a query, and yields `None`.
+    ///
     /// The `signal_type` parameter allows filtering by signal type (e.g. "param",
     /// "event", "stream"). Pass `None` to skip signal type filtering.
     pub fn map(
@@ -112,7 +115,10 @@ impl MappingEngine {
             let dir_match = match direction {
                 Direction::Outbound => rule.direction.includes_outbound(),
                 Direction::Inbound => rule.direction.includes_inbound(),
-                Direction::Both => unreachable!(),
+                // A query direction of "both" is meaningless — callers must
+                // nominate the direction of travel. Return no match rather
+                // than panic on a programming error.
+                Direction::Both => return None,
             };
             if !dir_match {
                 continue;
@@ -125,14 +131,10 @@ impl MappingEngine {
                 }
             }
 
-            // Try to match the pattern.
-            if let Some(captures) = rule.pattern.matches(address) {
-                return Some(apply_template(
-                    &rule.to_template,
-                    &captures,
-                    address,
-                    &rule.pattern,
-                ));
+            // Try to match the pattern, capturing the `**` suffix (if any) in
+            // the same pass so template expansion cannot slice the address.
+            if let Some((captures, suffix)) = rule.pattern.match_with_suffix(address) {
+                return Some(apply_template(&rule.to_template, &captures, &suffix));
             }
         }
         None
@@ -152,12 +154,14 @@ impl MappingEngine {
 ///
 /// The template may contain:
 /// - `{name}` — replaced with the captured value
-/// - `**` — replaced with the remaining path suffix after the pattern match
+/// - `**` — replaced with the address segments matched by a trailing `**` in
+///   the pattern (joined by '/'). When the suffix is empty, a trailing '/'
+///   left behind by the substitution is removed so the mapped address
+///   round-trips cleanly through further mappings.
 fn apply_template(
     template: &str,
     captures: &ensemble_routing::CaptureSet,
-    address: &str,
-    pattern: &Pattern,
+    suffix: &[&str],
 ) -> String {
     let mut result = template.to_string();
 
@@ -166,33 +170,19 @@ fn apply_template(
         result = result.replace(&format!("{{{}}}", name), value);
     }
 
-    // Handle ** passthrough: find the suffix of the address not consumed by the pattern.
+    // Handle ** passthrough with the segments the trailing `**` consumed.
     if template.contains("**") {
-        let suffix = compute_suffix(address, pattern);
-        result = result.replace("**", &suffix);
+        let joined = suffix.join("/");
+        result = result.replace("**", &joined);
+        // An empty suffix leaves a trailing '/' (e.g. "/remote/transport/**"
+        // becomes "/remote/transport/"); collapse it so the result is a
+        // well-formed address. "/" alone is left untouched.
+        if joined.is_empty() && result.len() > 1 && result.ends_with('/') {
+            result.pop();
+        }
     }
 
     result
-}
-
-/// Compute the path suffix not consumed by the pattern.
-///
-/// For example, pattern `/transport/**` matching `/transport/bpm/now`
-/// leaves suffix `bpm/now`.
-fn compute_suffix(address: &str, pattern: &Pattern) -> String {
-    let pattern_str = pattern.source();
-
-    // Find the prefix before ** in the pattern.
-    if let Some(pos) = pattern_str.find("**") {
-        let prefix = &pattern_str[..pos];
-        // The suffix is everything in the address after the prefix.
-        if let Some(addr_pos) = address.find(&prefix[prefix.len().saturating_sub(1)..]) {
-            let after_prefix = &address[addr_pos + prefix.len().saturating_sub(1)..];
-            // Strip leading slash if present.
-            return after_prefix.trim_start_matches('/').to_string();
-        }
-    }
-    String::new()
 }
 
 #[cfg(test)]
@@ -261,6 +251,70 @@ mod tests {
             engine.map("/transport/bpm/now", Direction::Outbound, None),
             Some("/remote/transport/bpm/now".to_string())
         );
+    }
+
+    #[test]
+    fn wildcard_passthrough_zero_segment_suffix() {
+        // `**` matching zero segments must not leave a dangling '/' that
+        // would fail to round-trip through further mappings.
+        let engine =
+            MappingEngine::new(&[make_rule("/transport/**", "/remote/transport/**", "both")]);
+        assert_eq!(
+            engine.map("/transport", Direction::Outbound, None),
+            Some("/remote/transport".to_string())
+        );
+    }
+
+    #[test]
+    fn passthrough_with_capture_before_recursive_wildcard() {
+        // A capture before `**` previously corrupted the suffix, because the
+        // suffix was computed from pattern-source byte offsets rather than
+        // the matched segments.
+        let engine =
+            MappingEngine::new(&[make_rule("/track/{id}/**", "/mixer/{id}/**", "outbound")]);
+        assert_eq!(
+            engine.map("/track/7/volume/x", Direction::Outbound, None),
+            Some("/mixer/7/volume/x".to_string())
+        );
+        assert_eq!(
+            engine.map("/track/7", Direction::Outbound, None),
+            Some("/mixer/7".to_string())
+        );
+    }
+
+    #[test]
+    fn passthrough_with_single_wildcard_before_recursive() {
+        // `*` is not captured, so the template can only pass through the
+        // `**` suffix; the wildcard-matched segment is not re-substituted.
+        let engine = MappingEngine::new(&[make_rule("/a/*/**", "/b/**", "both")]);
+        assert_eq!(
+            engine.map("/a/x/y/z", Direction::Inbound, None),
+            Some("/b/y/z".to_string())
+        );
+    }
+
+    #[test]
+    fn passthrough_multibyte_address_does_not_panic() {
+        // Multibyte content previously panicked on a byte-index slice that
+        // was not a char boundary.
+        let engine = MappingEngine::new(&[make_rule("/*/**", "/out/**", "both")]);
+        assert_eq!(
+            engine.map("/é/x", Direction::Outbound, None),
+            Some("/out/x".to_string())
+        );
+        let engine = MappingEngine::new(&[make_rule("/track/{番号}/**", "/out/{番号}/**", "both")]);
+        assert_eq!(
+            engine.map("/track/⑦/音量/パン", Direction::Outbound, None),
+            Some("/out/⑦/音量/パン".to_string())
+        );
+    }
+
+    #[test]
+    fn both_query_direction_returns_none() {
+        // A query direction of "both" is a programming error; it must yield
+        // no match rather than panic.
+        let engine = MappingEngine::new(&[make_rule("/clock", "/remote/clock", "both")]);
+        assert_eq!(engine.map("/clock", Direction::Both, None), None);
     }
 
     #[test]

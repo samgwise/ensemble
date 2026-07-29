@@ -25,8 +25,29 @@ pub struct Config {
 pub struct BridgeConfig {
     /// Display name for this bridge voice.
     pub name: String,
+    /// Address to bind the QUIC listener to: an IPv4 or IPv6 literal
+    /// (brackets optional for IPv6) or a resolvable hostname.
+    #[serde(default = "default_listen_addr")]
+    pub listen_addr: String,
     /// Port to listen on for inbound QUIC connections.
     pub listen_port: u16,
+    /// Optional shared secret that peers must present in the bridge
+    /// handshake. When unset, authentication is disabled — only run
+    /// without it on trusted networks.
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    /// Maximum number of simultaneously open inbound connections; further
+    /// connections are closed at accept time.
+    #[serde(default = "default_max_inbound")]
+    pub max_inbound: usize,
+}
+
+fn default_listen_addr() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_max_inbound() -> usize {
+    32
 }
 
 /// Local hub connection.
@@ -92,8 +113,28 @@ listen_port = 7400
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.bridge.name, "test-bridge");
         assert_eq!(config.bridge.listen_port, 7400);
+        // Listener/auth fields default when unset.
+        assert_eq!(config.bridge.listen_addr, "0.0.0.0");
+        assert_eq!(config.bridge.auth_token, None);
+        assert_eq!(config.bridge.max_inbound, 32);
         assert!(config.peer.is_empty());
         assert!(config.mapping.is_empty());
+    }
+
+    #[test]
+    fn parse_listener_and_auth_fields() {
+        let toml = r#"
+[bridge]
+name = "test-bridge"
+listen_addr = "::1"
+listen_port = 7400
+auth_token = "s3cret"
+max_inbound = 4
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.bridge.listen_addr, "::1");
+        assert_eq!(config.bridge.auth_token, Some("s3cret".to_string()));
+        assert_eq!(config.bridge.max_inbound, 4);
     }
 
     #[test]
