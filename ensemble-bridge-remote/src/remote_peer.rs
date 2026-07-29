@@ -6,6 +6,7 @@
 //! and uses QUIC datagrams for stream-type actions (best-effort).
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -140,20 +141,30 @@ pub struct PeerInfo {
     pub name: String,
 }
 
-/// Start a QUIC listener on the specified port.
+/// Start a QUIC listener on the specified address and port.
+///
+/// `listen_addr` may be an IPv4 or IPv6 literal (brackets optional for IPv6)
+/// or a resolvable hostname. Accepted inbound connections are counted
+/// against `inbound_gauge`; once `max_inbound` connections are open, further
+/// connections are closed immediately. The peer manager decrements the
+/// gauge as sessions end.
 ///
 /// Returns the actual port bound to. The accept loop is spawned through the
 /// provided `TaskTracker` and returns immediately once the endpoint is bound.
 /// When `cancel` is triggered, the listener stops accepting and the endpoint
 /// is dropped, releasing the UDP socket and closing all connections on it.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_listener(
+    listen_addr: &str,
     port: u16,
     inbound_tx: mpsc::Sender<RemotePeer>,
+    inbound_gauge: Arc<AtomicUsize>,
+    max_inbound: usize,
     cancel: CancellationToken,
     tracker: TaskTracker,
 ) -> Result<u16> {
     let server_config = create_server_config()?;
-    let addr: SocketAddr = format!("0.0.0.0:{}", port).parse()?;
+    let addr = resolve_bind_addr(listen_addr, port).await?;
 
     let endpoint = Endpoint::server(server_config, addr).context("failed to bind QUIC endpoint")?;
     let actual_port = endpoint.local_addr()?.port();
@@ -168,11 +179,24 @@ pub async fn start_listener(
                     match incoming {
                         Some(incoming) => {
                             let inbound_tx = inbound_tx.clone();
+                            let gauge = inbound_gauge.clone();
 
                             tokio::spawn(async move {
                                 match incoming.await {
                                     Ok(connection) => {
                                         let addr = connection.remote_address();
+
+                                        // Enforce the inbound cap before
+                                        // committing resources to the session.
+                                        if gauge.fetch_add(1, Ordering::SeqCst) >= max_inbound {
+                                            eprintln!(
+                                                "Inbound connection from {} rejected: cap of {} reached",
+                                                addr, max_inbound
+                                            );
+                                            connection.close(0u32.into(), b"connection limit reached");
+                                            gauge.fetch_sub(1, Ordering::SeqCst);
+                                            return;
+                                        }
                                         eprintln!("Inbound QUIC connection from {}", addr);
 
                                         let peer = RemotePeer {
@@ -183,6 +207,7 @@ pub async fn start_listener(
 
                                         if let Err(e) = inbound_tx.send(peer).await {
                                             eprintln!("Failed to register inbound peer: {}", e);
+                                            gauge.fetch_sub(1, Ordering::SeqCst);
                                         }
                                     }
                                     Err(e) => {
@@ -210,19 +235,79 @@ pub async fn start_listener(
     Ok(actual_port)
 }
 
+/// Format a host and port for parsing or resolution, adding brackets around
+/// bare IPv6 literals.
+fn format_host_port(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// Resolve a configured listen address to a socket address.
+///
+/// Accepts IPv4/IPv6 literals (brackets optional for IPv6) and hostnames;
+/// the first resolved address is used.
+async fn resolve_bind_addr(host: &str, port: u16) -> Result<SocketAddr> {
+    let candidate = format_host_port(host, port);
+    if let Ok(addr) = candidate.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+    let mut addrs = tokio::net::lookup_host(&candidate)
+        .await
+        .with_context(|| format!("failed to resolve listen address '{host}'"))?;
+    addrs
+        .next()
+        .with_context(|| format!("listen address '{host}' resolved to no addresses"))
+}
+
 /// Connect to a remote peer.
-#[allow(dead_code)]
+///
+/// The configured host is resolved through the system resolver, so DNS
+/// hostnames and IPv6 literals work as well as IPv4 addresses. Each
+/// resolved address is tried in turn until a connection succeeds.
 pub async fn connect_to_peer(peer_config: &PeerConfig) -> Result<RemotePeer> {
+    let candidate = format_host_port(&peer_config.host, peer_config.port);
+    let addrs: Vec<SocketAddr> = match candidate.parse::<SocketAddr>() {
+        Ok(addr) => vec![addr],
+        Err(_) => {
+            let resolved: Vec<SocketAddr> = tokio::net::lookup_host(&candidate)
+                .await
+                .with_context(|| format!("failed to resolve peer host '{}'", peer_config.host))?
+                .collect();
+            if resolved.is_empty() {
+                anyhow::bail!("peer host '{}' resolved to no addresses", peer_config.host);
+            }
+            resolved
+        }
+    };
+
+    let mut last_err: Option<anyhow::Error> = None;
+    for addr in addrs {
+        match connect_to_addr(addr).await {
+            Ok(peer) => return Ok(peer),
+            Err(e) => {
+                eprintln!("Connect to {} failed: {}", addr, e);
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no peer addresses to try")))
+}
+
+/// Establish a QUIC connection to a single resolved socket address.
+async fn connect_to_addr(addr: SocketAddr) -> Result<RemotePeer> {
     let client_config = create_client_config();
 
-    // Bind to any available local port.
-    let mut endpoint =
-        Endpoint::client("0.0.0.0:0".parse()?).context("failed to create client endpoint")?;
+    // Bind the local endpoint on the same address family as the target so
+    // both IPv4 and IPv6 peers are reachable.
+    let bind: SocketAddr = match addr {
+        SocketAddr::V4(_) => "0.0.0.0:0".parse()?,
+        SocketAddr::V6(_) => "[::]:0".parse()?,
+    };
+    let mut endpoint = Endpoint::client(bind).context("failed to create client endpoint")?;
     endpoint.set_default_client_config(client_config);
-
-    let addr: SocketAddr = format!("{}:{}", peer_config.host, peer_config.port)
-        .parse()
-        .context("invalid peer address")?;
 
     eprintln!("Connecting to peer at {}...", addr);
 
@@ -256,12 +341,19 @@ pub struct HubSink {
 /// the peer's reply. The inbound peer accepts the incoming stream, reads the
 /// peer's hello, and replies. This avoids a deadlock where both sides open
 /// separate streams and wait for each other.
+///
+/// When `auth_token` is `Some`, the peer must present the identical token in
+/// its hello; the comparison is constant-time. On mismatch the connection is
+/// closed with an "authentication failed" reason and the handshake errors.
+/// The inbound side verifies the token before sending its own hello, so an
+/// unauthenticated peer learns nothing about us.
 pub async fn handshake(
     peer: &RemotePeer,
     local_bridge_id: &str,
     local_name: &str,
+    auth_token: Option<&str>,
 ) -> Result<(PeerInfo, quinn::SendStream, quinn::RecvStream)> {
-    let hello = protocol::bridge_hello(local_bridge_id, local_name);
+    let hello = protocol::bridge_hello(local_bridge_id, local_name, auth_token);
 
     if peer.is_inbound {
         let (mut send, mut recv) = peer
@@ -272,6 +364,11 @@ pub async fn handshake(
         let peer_hello = codec::read_message(&mut recv)
             .await
             .context("failed to read bridge_hello")?;
+        let presented = protocol::get_auth_token(&peer_hello);
+        if !protocol::auth_token_matches(auth_token, presented.as_deref()) {
+            peer.connection.close(0u32.into(), b"authentication failed");
+            anyhow::bail!("peer rejected: invalid auth token");
+        }
         codec::write_message(&mut send, &hello)
             .await
             .context("failed to send bridge_hello")?;
@@ -289,6 +386,11 @@ pub async fn handshake(
     let peer_hello = codec::read_message(&mut recv)
         .await
         .context("failed to read bridge_hello")?;
+    let presented = protocol::get_auth_token(&peer_hello);
+    if !protocol::auth_token_matches(auth_token, presented.as_deref()) {
+        peer.connection.close(0u32.into(), b"authentication failed");
+        anyhow::bail!("peer rejected: invalid auth token");
+    }
     parse_peer_hello(peer_hello, send, recv)
 }
 
@@ -324,6 +426,53 @@ fn parse_peer_hello(
         recv_stream,
     ))
 }
+/// Send one outbound message to the peer, as a datagram for stream signals
+/// or on the reliable stream otherwise.
+///
+/// Returns `false` when the session should end (connection-level failure).
+/// Datagrams that fail for congestion, size or capability reasons are logged
+/// and dropped without harming the session.
+async fn send_outbound_message(
+    msg: &WireMessage,
+    send_stream: &mut quinn::SendStream,
+    conn: &quinn::Connection,
+    addr: SocketAddr,
+) -> bool {
+    let signal_type = protocol::get_signal_type(msg).unwrap_or_else(|| "event".to_string());
+
+    if signal_type == "stream" {
+        // Send as QUIC datagram (best-effort, lowest latency).
+        match codec::encode_to_vec(msg) {
+            Ok(bytes) => {
+                if let Err(e) = conn.send_datagram(bytes.into()) {
+                    match e {
+                        quinn::SendDatagramError::ConnectionLost(e) => {
+                            eprintln!("[peer {}] Connection lost on datagram send: {}", addr, e);
+                            return false;
+                        }
+                        other => {
+                            // Congestion, size or capability failures drop this
+                            // datagram only — the session carries on.
+                            eprintln!("[peer {}] Datagram dropped: {}", addr, other);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[peer {}] Datagram encode failed: {}", addr, e);
+            }
+        }
+        return true;
+    }
+
+    // Send on the reliable stream.
+    if let Err(e) = codec::write_message(send_stream, msg).await {
+        eprintln!("[peer {}] Stream write failed: {}", addr, e);
+        return false;
+    }
+    true
+}
+
 /// Run a full peer session using the provided pre-handshaked streams.
 ///
 /// This function takes ownership of the connection and streams, and runs until
@@ -334,7 +483,12 @@ fn parse_peer_hello(
 ///
 /// The `replay_rx` channel receives param replay messages that should be sent
 /// to this peer before live outbound traffic (e.g. current param state when a
-/// new peer connects).
+/// new peer connects). The replay is drained fully before any live message is
+/// sent, so the peer sees a consistent state snapshot ahead of updates.
+///
+/// `reforward_tx` is the bridge-wide outbound broadcast; inbound messages
+/// that pass the loop guard are re-forwarded through it (unchanged) so they
+/// propagate to other peers across multi-hop topologies.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_peer_session(
     peer: RemotePeer,
@@ -345,7 +499,8 @@ pub async fn run_peer_session(
     engine: Arc<MappingEngine>,
     hub_sink: Arc<HubSink>,
     mut outbound_rx: broadcast::Receiver<WireMessage>,
-    mut replay_rx: mpsc::Receiver<WireMessage>,
+    reforward_tx: broadcast::Sender<WireMessage>,
+    replay_rx: mpsc::Receiver<WireMessage>,
     cancel: CancellationToken,
 ) {
     let addr = peer.addr;
@@ -373,79 +528,56 @@ pub async fn run_peer_session(
     // re-polling a completed handle (which panics in current tokio).
     let mut set = tokio::task::JoinSet::new();
 
-    // Writer task: outbound broadcast + replay → QUIC stream + datagrams.
+    // Writer task: param replay, then live outbound broadcast → QUIC stream +
+    // datagrams.
     let writer_cancel = session_cancel.clone();
     set.spawn(async move {
-        let mut replay_closed = false;
+        let mut replay_rx = replay_rx;
+
+        // Drain the param replay fully before any live traffic, so the peer
+        // receives a consistent state snapshot before updates. When replay is
+        // disabled the sender is already dropped and this loop exits at once.
         loop {
-            let msg = if replay_closed {
-                tokio::select! {
-                    _ = writer_cancel.cancelled() => break,
-                    result = outbound_rx.recv() => {
-                        match result {
-                            Ok(msg) => msg,
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
-                                continue;
-                            }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                eprintln!("[peer {}] Outbound channel closed", addr);
-                                break;
+            tokio::select! {
+                _ = writer_cancel.cancelled() => {
+                    let _ = send_stream.finish();
+                    return;
+                }
+                msg = replay_rx.recv() => {
+                    match msg {
+                        Some(msg) => {
+                            if !send_outbound_message(&msg, &mut send_stream, &conn_writer, addr).await {
+                                let _ = send_stream.finish();
+                                return;
                             }
                         }
+                        None => break,
                     }
                 }
-            } else {
-                tokio::select! {
-                    _ = writer_cancel.cancelled() => break,
-                    result = outbound_rx.recv() => {
-                        match result {
-                            Ok(msg) => msg,
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
-                                continue;
-                            }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                eprintln!("[peer {}] Outbound channel closed", addr);
-                                break;
-                            }
+            }
+        }
+
+        // Live traffic.
+        loop {
+            let msg = tokio::select! {
+                _ = writer_cancel.cancelled() => break,
+                result = outbound_rx.recv() => {
+                    match result {
+                        Ok(msg) => msg,
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            eprintln!("[peer {}] Writer lagged, skipped {} messages", addr, n);
+                            continue;
                         }
-                    }
-                    result = replay_rx.recv() => {
-                        match result {
-                            Some(msg) => msg,
-                            None => {
-                                replay_closed = true;
-                                continue;
-                            }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            eprintln!("[peer {}] Outbound channel closed", addr);
+                            break;
                         }
                     }
                 }
             };
 
-            // Determine signal type for routing to stream vs datagram.
-            let signal_type =
-                protocol::get_signal_type(&msg).unwrap_or_else(|| "event".to_string());
-
-            if signal_type == "stream" {
-                // Send as QUIC datagram (best-effort, lowest latency).
-                match codec::encode_to_vec(&msg) {
-                    Ok(bytes) => {
-                        if let Err(e) = conn_writer.send_datagram(bytes.into()) {
-                            eprintln!("[peer {}] Datagram send failed: {}", addr, e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[peer {}] Datagram encode failed: {}", addr, e);
-                    }
-                }
-            } else {
-                // Send on the reliable stream.
-                if let Err(e) = codec::write_message(&mut send_stream, &msg).await {
-                    eprintln!("[peer {}] Stream write failed: {}", addr, e);
-                    break;
-                }
+            if !send_outbound_message(&msg, &mut send_stream, &conn_writer, addr).await {
+                break;
             }
         }
         // Close the send stream.
@@ -459,6 +591,7 @@ pub async fn run_peer_session(
         let sink_dgram = sink_reader.clone();
         let engine_dgram = engine_reader.clone();
         let lg_dgram = lg_reader.clone();
+        let reforward_dgram = reforward_tx.clone();
         let dgram_addr = addr;
         let dgram_cancel = reader_cancel.clone();
         let dgram_handle = tokio::spawn(async move {
@@ -475,6 +608,7 @@ pub async fn run_peer_session(
                                         &lg_dgram,
                                         &engine_dgram,
                                         &sink_dgram,
+                                        &reforward_dgram,
                                     )
                                     .await;
                                 }
@@ -499,8 +633,15 @@ pub async fn run_peer_session(
                 result = codec::read_message(&mut recv_stream) => {
                     match result {
                         Ok(msg) => {
-                            handle_inbound_message(msg, addr, &lg_reader, &engine_reader, &sink_reader)
-                                .await;
+                            handle_inbound_message(
+                                msg,
+                                addr,
+                                &lg_reader,
+                                &engine_reader,
+                                &sink_reader,
+                                &reforward_tx,
+                            )
+                            .await;
                         }
                         Err(codec::CodecError::ConnectionClosed) => {
                             eprintln!("[peer {}] Stream closed", addr);
@@ -531,13 +672,16 @@ pub async fn run_peer_session(
     eprintln!("[peer {}] Session ended", addr);
 }
 
-/// Handle an inbound bridge message: check loop guard, map address, forward to hub.
+/// Handle an inbound bridge message: check the loop guard and duplicate
+/// suppression, map the address, forward to the local hub, and re-forward to
+/// other peers so messages propagate across multi-hop topologies.
 async fn handle_inbound_message(
     msg: WireMessage,
     peer_addr: SocketAddr,
     loop_guard: &LoopGuard,
     engine: &MappingEngine,
     sink: &HubSink,
+    reforward_tx: &broadcast::Sender<WireMessage>,
 ) {
     match msg.msg_type.as_str() {
         protocol::MSG_BRIDGE_ACTION => {
@@ -552,6 +696,21 @@ async fn handle_inbound_message(
                 }
             }
 
+            // Duplicate suppression: each unique message is processed at most
+            // once per bridge. Second sightings (the normal case in rings and
+            // meshes) are dropped quietly.
+            if let Some(msg_id) = protocol::get_msg_id(&msg) {
+                if !loop_guard.check_and_record(&msg_id) {
+                    return;
+                }
+            }
+
+            // Re-forward to our other peers unchanged, preserving the
+            // original origin and msg_id across hops. The broadcast also
+            // echoes back down the session this message arrived on; the far
+            // end's loop guard or duplicate suppression drops the echo.
+            let _ = reforward_tx.send(msg.clone());
+
             // Map address and forward to local hub.
             let address = protocol::get_address(&msg).unwrap_or_default();
             let signal_type_str =
@@ -561,7 +720,6 @@ async fn handle_inbound_message(
                 engine.map(&address, Direction::Inbound, Some(&signal_type_str))
             {
                 let source = protocol::get_source(&msg);
-                let timestamp = protocol::get_timestamp(&msg);
                 let payload = protocol::get_action_payload(&msg);
 
                 // Parse signal type.
@@ -571,8 +729,13 @@ async fn handle_inbound_message(
                     _ => SignalType::Event,
                 };
 
-                let action =
-                    action_with_source(source, &mapped_address, signal_type, timestamp, payload);
+                // Bridged actions are forwarded as immediate (timestamp 0.0):
+                // the wire timestamp is in the *sending* hub's clock domain
+                // and the two hubs are not clock-synchronised, so honouring
+                // it could schedule the action arbitrarily far in the local
+                // future or past. True clock-domain rebasing is a deferred
+                // enhancement.
+                let action = action_with_source(source, &mapped_address, signal_type, 0.0, payload);
 
                 eprintln!(
                     "[peer {}] Inbound: {} → {} (source={})",
@@ -581,6 +744,41 @@ async fn handle_inbound_message(
 
                 if let Err(e) = sink.tx.send(action).await {
                     eprintln!("[peer {}] Failed to forward to hub: {}", peer_addr, e);
+                }
+            }
+        }
+        protocol::MSG_BRIDGE_UNSET => {
+            // Check loop guard.
+            if let Some(origin) = protocol::get_origin(&msg) {
+                if loop_guard.is_loop(&origin) {
+                    eprintln!(
+                        "[peer {}] Dropping looped unset (origin={})",
+                        peer_addr, origin
+                    );
+                    return;
+                }
+            }
+
+            // Duplicate suppression, as for actions.
+            if let Some(msg_id) = protocol::get_msg_id(&msg) {
+                if !loop_guard.check_and_record(&msg_id) {
+                    return;
+                }
+            }
+
+            // Re-forward across hops, unchanged.
+            let _ = reforward_tx.send(msg.clone());
+
+            // Map the address and unset the param on the local hub. Unsets
+            // are param semantics, so the signal filter sees "param".
+            let address = protocol::get_address(&msg).unwrap_or_default();
+            if let Some(mapped_address) = engine.map(&address, Direction::Inbound, Some("param")) {
+                eprintln!(
+                    "[peer {}] Inbound unset: {} → {}",
+                    peer_addr, address, mapped_address
+                );
+                if let Err(e) = sink.tx.send(unset_param(mapped_address)).await {
+                    eprintln!("[peer {}] Failed to forward unset to hub: {}", peer_addr, e);
                 }
             }
         }
