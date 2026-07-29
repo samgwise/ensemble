@@ -4,3 +4,6 @@ sign-tag = false
 tag-name = "{{crate_name}}-v{{version}}"
 pre-release-commit-message = "chore: release {{crate_name}} v{{version}}"
 tag-message = "{{crate_name}} v{{version}}"
+# Tag-only: crates.io publishing happens in the release workflow (release.yml)
+# once the pushed tag triggers it — publishing here too would race the workflow.
+publish = false
