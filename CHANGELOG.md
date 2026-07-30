@@ -2,6 +2,48 @@
 
 All notable changes to the Ensemble reference implementation.
 
+## [Unreleased] — Review remediation
+
+Correctness, robustness, and test-integrity fixes from a full codebase review.
+
+**Breaking changes (pre-1.0):**
+
+- `ensemble-protocol`: removed the unused serde payload structs (`ActionPayload`, `HelloPayload`, etc.); the builder functions remain the single source of wire truth
+- `ensemble-core`: removed the backward-compat `pub use ensemble_discovery as discovery` re-export (depend on `ensemble-discovery` directly)
+- `ensemble-client`: hub `error` messages are no longer printed to stderr — they are queued for the new `recv_error()`/`try_recv_error()` API returning `HubError`
+
+**Hub:**
+
+- Fixed hub-wide stall: the state lock is no longer held across awaited sends (a stalled subscriber previously froze all routing, clock pongs, and the scheduler)
+- Fixed voice leak: a malformed `patch_manifest` no longer silently kills the connection handler (it is rejected and the connection stays alive)
+- Duplicate subscriptions are deduped; `unsubscribe` removes all occurrences of a pattern
+- Clock pongs read hub time without taking the state lock; welcome write moved outside the registration lock
+
+**Client & clock:**
+
+- `disconnect()` now flushes the disconnect frame before closing (previously raced and usually never reached the hub)
+- Clock sync min-RTT filter is windowed (10s) so the offset re-converges after network changes
+- Clock task no longer holds the clock mutex across sends; pending pings bounded
+
+**Bridges:**
+
+- MIDI: payloads are range-validated (channel 0-15, note/cc/value 0-127, finite non-negative duration) — out-of-range input can no longer panic the bridge or corrupt the MIDI stream; note-off tasks only spawn when note-on fired
+- OSC: deep addresses now forwarded (`/**` subscription); `unset_param` no longer emits phantom OSC Nil messages; i64→i32 clamped; prefix stripping is segment-aware
+- Remote: fixed `**` suffix panic/corruption via new additive `Pattern::match_with_suffix` routing API; deterministic mutual-dial tie-break; supervised local-hub reconnect; shared-secret auth option with inbound cap and configurable bind; unset propagation across hubs; oversized datagrams dropped instead of killing sessions; real multi-hop loop prevention (msg_id + bounded seen-set); hostname/IPv6 peer resolution
+
+**Demos & TUI:**
+
+- Pitch cycler: eliminated state-mutex deadlock (frozen UI, shutdown hang)
+- Euclidean: pause no longer kills the scheduler permanently; steps can no longer be reduced below hits (panic); Shift+B BPM step fixed
+- All TUIs restore the terminal on error/panic; hub TUI no longer holds the hub state lock while drawing; multi-byte UTF-8 payloads no longer panic the Param Inspector; voice list ordering is stable
+
+**Testing & CI:**
+
+- Conformance suite rewritten to drive every suite from its YAML fixtures, covering eight previously untested cases; circular `action_structure` test replaced; poll-based waits replace fixed sleeps
+- Hub integration regression tests added (patch_manifest resilience, subscribe dedupe, unsubscribe, slow-subscriber non-stall)
+- release.yml installs ALSA deps and extracts crate names correctly for `ensemble-values` tags; `cargo release` is now tag-only (the workflow publishes)
+- Podman-based Linux pre-release verification added (`containers/Containerfile`, `scripts/linux-test.ps1`); documented as a release gate
+
 ## [Unreleased] — OSC Bridge, Demo Applications & Discovery Crate
 
 - Created `ensemble-bridge-osc` crate — bidirectional OSC/UDP bridge with configurable address prefix mapping
