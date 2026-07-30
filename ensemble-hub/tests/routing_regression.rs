@@ -74,7 +74,9 @@ async fn malformed_patch_manifest_keeps_voice_functional() {
     // A valid patch afterwards must still apply.
     let mut patch = std::collections::BTreeMap::new();
     patch.insert("name".into(), Value::String("patched-a".into()));
-    a.patch_manifest(Value::Map(patch)).await.expect("valid patch");
+    a.patch_manifest(Value::Map(patch))
+        .await
+        .expect("valid patch");
     tokio::time::sleep(Duration::from_millis(100)).await;
     {
         let st = state.lock().await;
@@ -95,7 +97,9 @@ async fn duplicate_subscribe_delivers_once() {
     let b = Hub::connect(port, "dup-b").await.expect("connect b");
 
     a.subscribe("/dup/**").await.expect("subscribe once");
-    a.subscribe("/dup/**").await.expect("subscribe twice (deduped)");
+    a.subscribe("/dup/**")
+        .await
+        .expect("subscribe twice (deduped)");
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     b.send_action(action("/dup/x", SignalType::Event, 0.0, Value::Null))

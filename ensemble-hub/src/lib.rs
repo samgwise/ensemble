@@ -577,15 +577,14 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
                     MSG_DISCONNECT => {
                         let left_payload = {
                             let mut st = state.lock().await;
-                            st.remove_voice(voice_id, "disconnect")
-                                .map(|name| {
-                                    Value::Map({
-                                        let mut m = BTreeMap::new();
-                                        m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-                                        m.insert("name".into(), Value::String(name));
-                                        m
-                                    })
+                            st.remove_voice(voice_id, "disconnect").map(|name| {
+                                Value::Map({
+                                    let mut m = BTreeMap::new();
+                                    m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                                    m.insert("name".into(), Value::String(name));
+                                    m
                                 })
+                            })
                         };
                         if let Some(payload) = left_payload {
                             // Emit hub event: voice left.
@@ -734,15 +733,14 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
             Err(CodecError::ConnectionClosed) => {
                 let left_payload = {
                     let mut st = state.lock().await;
-                    st.remove_voice(voice_id, "connection closed")
-                        .map(|name| {
-                            Value::Map({
-                                let mut m = BTreeMap::new();
-                                m.insert("voice_id".into(), Value::Integer(voice_id as i64));
-                                m.insert("name".into(), Value::String(name));
-                                m
-                            })
+                    st.remove_voice(voice_id, "connection closed").map(|name| {
+                        Value::Map({
+                            let mut m = BTreeMap::new();
+                            m.insert("voice_id".into(), Value::Integer(voice_id as i64));
+                            m.insert("name".into(), Value::String(name));
+                            m
                         })
+                    })
                 };
                 if let Some(payload) = left_payload {
                     // Emit hub event: voice left.
@@ -779,7 +777,11 @@ async fn handle_voice(stream: TcpStream, state: SharedState) {
 /// Collect the sender channels of all voices subscribed to `address`
 /// (excluding `source`). The senders are cloned so the state lock can be
 /// released before any messages are sent.
-fn collect_recipients(st: &HubState, source: VoiceId, address: &str) -> Vec<mpsc::Sender<WireMessage>> {
+fn collect_recipients(
+    st: &HubState,
+    source: VoiceId,
+    address: &str,
+) -> Vec<mpsc::Sender<WireMessage>> {
     st.voices
         .values()
         .filter(|v| v.id != source)
