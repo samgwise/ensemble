@@ -137,3 +137,11 @@ cases:
       data: [0, 0, 128, 63]
     expected_type: "typed_binary"
     expected_tag: "ensemble/f32"
+
+  - name: binary
+    description: "Opaque binary round-trips"
+    value:
+      type: "binary"
+      data: [0, 127, 128, 255]
+    expected_type: "binary"
+    expected_length: 4

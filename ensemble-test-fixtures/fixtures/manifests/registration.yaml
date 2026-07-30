@@ -114,6 +114,7 @@ cases:
       - action: "subscribe"
         pattern: "/test/**"
       - action: "send_action"
+        voice: "sender"
         address: "/test/foo"
         signal_type: "event"
         payload:

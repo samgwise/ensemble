@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn float_roundtrip() {
-        let v = Value::Float(FloatValue::new(3.14159));
+        let v = Value::Float(FloatValue::new(2.5));
         let encoded = rmp_serde::to_vec(&v).unwrap();
         let decoded: Value = rmp_serde::from_slice(&encoded).unwrap();
         assert_eq!(v, decoded);
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn conformance_float() {
-        let v = Value::Float(FloatValue::new(3.14159));
+        let v = Value::Float(FloatValue::new(2.5));
         let encoded = rmp_serde::to_vec(&v).unwrap();
         let decoded: Value = rmp_serde::from_slice(&encoded).unwrap();
         assert_eq!(v, decoded);
