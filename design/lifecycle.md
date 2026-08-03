@@ -210,6 +210,15 @@ Unsubscribe {
 
 ***
 
+## Subscription Multiplicity
+
+Subscriptions are idempotent per voice and pattern: registering an identical
+pattern twice has no additional effect, and a voice never receives the same
+action more than once per matching pattern. Unsubscribe removes every
+occurrence of the pattern.
+
+***
+
 # Subscription Behaviour
 
 When a new subscription is registered:

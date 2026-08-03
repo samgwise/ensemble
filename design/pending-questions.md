@@ -31,7 +31,7 @@ Maps are easier to evolve than positional tuples.
 
 **Decision**: YAML fixtures with language-neutral format.
 
-Implemented in `ensemble-test-fixtures` and `ensemble-conformance`. 14 YAML fixture files covering routing, values, protocol, scheduling, params, and manifests. Fixtures use simple YAML (no anchors, tags, or complex keys) for easy conversion to JSON or parsing by other languages.
+Implemented in `ensemble-test-fixtures` and `ensemble-conformance`. 14 YAML fixture files covering routing, values, protocol, lifecycle, scheduling, params, and manifests. Fixtures use simple YAML (no anchors, tags, or complex keys) for easy conversion to JSON or parsing by other languages. Every suite is driven by its fixtures, so the spec and the tests cannot drift apart.
 
 ### 5. Local Hub Discovery — RESOLVED
 
@@ -41,14 +41,14 @@ Documented in `local-discovery.md`. Default port `7331` provides universal fallb
 
 ## Remaining Open Questions
 
-### 6. Hub-to-Hub Semantic Policies
+### 6. Hub-to-Hub Semantic Policies — RESOLVED
 
-Hub Bridge exists as a concept but is not yet implemented. Open questions:
+**Decision**: Implemented in `ensemble-bridge-remote` (see `bridge-remote.md`).
 
-- **Param replay forwarding**: Should retained Params be replayed, ignored, or configurable when bridging between hubs?
-- **Loop prevention**: Hub A ↔ Hub B can easily produce cycles.
+- **Param replay forwarding**: retained params ARE replayed to newly connected peers, and the replay is fully drained before live traffic is forwarded, so a stale replayed value can never overtake a newer live update. Param unsets propagate across the bridge via a dedicated `bridge_unset` message.
+- **Loop prevention**: every bridged message carries a unique `msg_id`; bridges re-forward inbound messages unchanged (origin preserved) and suppress duplicates via a bounded per-bridge seen-set. This gives exactly-once delivery and guaranteed termination in arbitrary topologies (chains, rings, meshes), verified by integration tests.
 
-This is the largest architectural question remaining. Fortunately it lives in bridge design, not core protocol.
+This was the largest architectural question. It lived in bridge design, not core protocol, and the core protocol is unchanged by its resolution.
 
 ### 7. Capability Taxonomy
 

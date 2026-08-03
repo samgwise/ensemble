@@ -426,7 +426,7 @@ lifecycle/
 scheduling/
 params/
 protocol/
-
+manifests/
 
 fixture directories.
 
