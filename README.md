@@ -369,6 +369,12 @@ cargo publish --dry-run -p ensemble-routing
 # ... etc, in dependency order
 ```
 
+Note: a dry-run builds against the crates.io versions of any internal
+dependencies, so it fails for a crate that relies on API added since the last
+published version of one of its dependencies (see "Release ordering" below).
+Such failures are expected mid-cycle and only resolve once the dependency has
+actually been published.
+
 ### CI pipeline
 
 The CI workflow (`.github/workflows/ci.yml`) runs four jobs on every PR targeting `main`:
@@ -404,7 +410,23 @@ Each crate is versioned independently. To release a specific crate:
 
 The release workflow is triggered by pushing a tag matching `*-v*` (e.g., `ensemble-core-v0.1.0`). It runs the full test suite, publishes the specific crate to crates.io, and creates a GitHub release.
 
-To release multiple crates, repeat the process for each one. Dependencies must be published before dependents — for example, if you update `ensemble-core`, publish it before publishing `ensemble-client` which depends on it.
+### Release ordering
+
+When a change spans multiple crates, dependencies must be published **before** their dependents, and each dependent's release must happen only after its dependency versions are live on crates.io. `cargo release` updates dependents' version requirements in the workspace as each crate is bumped, but crates.io only accepts a publish once every version requirement in the crate's manifest can be satisfied from the registry.
+
+Publishable crates in dependency order (crates on the same level can be released in any order):
+
+1. `ensemble-values`, `ensemble-routing`, `ensemble-clock`, `ensemble-discovery`, `ensemble-test-fixtures`
+2. `ensemble-protocol`
+3. `ensemble-manifest`
+4. `ensemble-core`
+5. `ensemble-client`
+6. `ensemble-hub`, `ensemble-bridge-midi`, `ensemble-bridge-osc`
+7. `ensemble-hub-tui`, `ensemble-bridge-remote`
+
+(`ensemble-conformance` and the two demo apps are not published.)
+
+**Why dry-runs can fail mid-cycle:** `cargo publish` strips `path` from internal dependencies and builds the package against the versions on crates.io. If a dependent uses API added since the last published version of a dependency — e.g. `ensemble-bridge-remote` calling `Pattern::match_with_suffix` or `codec::encode_to_vec`, which exist only in the unreleased `ensemble-routing`/`ensemble-core` — the dry-run fails to compile until those dependency versions are actually published. This is expected; release in the order above and re-run the dry-run after each dependency goes live.
 
 ## Licence
 
